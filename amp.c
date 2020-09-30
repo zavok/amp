@@ -91,65 +91,66 @@ threadmain(int argc, char **argv)
 	};
 	for (;;) {
 		switch (alt(alts)) {
-			case 0: /* keyboard */
-				if (kv == 0x7f) threadexitsall(nil);
-				break;
-			case 1: /* mouse */
-				if (mv.buttons == 0) {
-					nbsend(fctl->c, &playing);
-				}
-				if (mv.buttons == 1) {
-					nbsendul(fctl->c, 0);
-					clearcurabs();
-					long mrow = (mv.xy.y - screen->r.min.y) / (DHEIGHT + 4);
-					long mx = mv.xy.x - screen->r.min.x - 4;
-					if (mx < 0) mx = 0;
-					if (mx >= dwidth) mx = dwidth - 1;
-					long newpos = (scroll + mrow) * dwidth + mx;
-					curpos = newpos;
-					if (curpos >= pcmlen / (ZOOMOUT * 4))
-						curpos = pcmlen / (ZOOMOUT * 4) - 1;
-					pp = pcm + curpos * (ZOOMOUT * 4);
-					drawcurabs();
-					flushimage(display, 1);
-				}
-				if (mv.buttons == 4) {
-					playing = (playing)? 0 : 1;
-					nbsend(fctl->c, &playing);
-				}
-				if (mv.buttons == 8) { /* scroll up */
-					if (scroll == 0) break;
-					scroll--;
-					if (scroll < 0) scroll = 0;
-					clear();
-					redraw(scroll * dwidth);
-					flushimage(display, 1);
-				}
-				if (mv.buttons == 16) { /* scroll down */
-					scroll++;
-					if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
-						scroll = pcmlen/(4 * ZOOMOUT*dwidth);
-					clear();
-					redraw(scroll * dwidth);
-					flushimage(display, 1);
-				}
-				break;
-			case 2: /* resize */
-				if(getwindow(display, Refnone) < 0)
-					sysfatal("resize failed: %r");
-				setdwidth();
+		case 0: /* keyboard */
+			if (kv == 0x7f) threadexitsall(nil);
+			break;
+		case 1: /* mouse */
+			if (mv.buttons == 0) {
+				nbsend(fctl->c, &playing);
+			}
+			if (mv.buttons == 1) {
+				nbsendul(fctl->c, 0);
+				clearcurabs();
+				long mrow = (mv.xy.y - screen->r.min.y) / (DHEIGHT + 4);
+				long mx = mv.xy.x - screen->r.min.x - 4;
+				if (mx < 0) mx = 0;
+				if (mx >= dwidth) mx = dwidth - 1;
+				long newpos = (scroll + mrow) * dwidth + mx;
+				curpos = newpos;
+				if (curpos >= pcmlen / (ZOOMOUT * 4))
+					curpos = pcmlen / (ZOOMOUT * 4) - 1;
+				pp = pcm + curpos * (ZOOMOUT * 4);
+				drawcurabs();
+				flushimage(display, 1);
+			}
+			if (mv.buttons == 4) {
+				playing = (playing)? 0 : 1;
+				nbsend(fctl->c, &playing);
+			}
+			if (mv.buttons == 8) { /* scroll up */
+				if (scroll == 0) break;
+				scroll--;
+				if (scroll < 0) scroll = 0;
+				clear();
+				redraw(scroll * dwidth);
+				flushimage(display, 1);
+			}
+			if (mv.buttons == 16) { /* scroll down */
+				scroll++;
 				if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
 					scroll = pcmlen/(4 * ZOOMOUT*dwidth);
 				clear();
 				redraw(scroll * dwidth);
 				flushimage(display, 1);
-				break;
-			case 3: /* position change */
-				clearcurabs();
-				curpos = pv / (4 * ZOOMOUT);
-				drawcurabs();
-				flushimage(display, 1);
-				break;
+			}
+			break;
+		case 2: /* resize */
+			if(getwindow(display, Refnone) < 0)
+				sysfatal("resize failed: %r");
+			setdwidth();
+			if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
+				scroll = pcmlen/(4 * ZOOMOUT*dwidth);
+			clear();
+			redraw(scroll * dwidth);
+			flushimage(display, 1);
+			break;
+		case 3: /* position change */
+			clearcurabs();
+			curpos = pv / (4 * ZOOMOUT);
+			drawcurabs();
+			flushimage(display, 1);
+			break;
+
 		}
 	}
 }
@@ -219,7 +220,7 @@ void
 usage(void)
 {
 	fprint(2, "usage: %s file.pcm\n", argv0);
-	exits("usage");
+	threadexitsall("usage");
 }
 
 
