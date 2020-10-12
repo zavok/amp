@@ -19,8 +19,7 @@ struct Fetchctl {
 
 s8int *pcm, *pp;
 long pcmlen, scroll, curpos;
-Rectangle *thumb;
-Image *Ibg, *Itrbg, *Itrfg, *Icur;
+Image *Ibg, *Itrbg, *Itrfg, *Icur, *Irow;
 int dwidth;
 int yieldcounter;
 long playing;
@@ -29,17 +28,16 @@ void usage(void);
 void clear(void);
 void setdwidth(void);
 void drawpcm(Point, ulong);
-void drawpcmbar(Point, ulong);
 void drawcur(Point);
 void drawcurabs(void);
 void clearcurabs(void);
 void redraw(ulong);
 void loadpcm(char*);
-void mkthumb(void);
 Point getcurxy(void);
 void threadplay(void*);
 void threadfetch(void*);
 Fetchctl* initfetch(void);
+int fillrow(ulong, ulong);
 
 void
 threadmain(int argc, char **argv)
@@ -77,8 +75,9 @@ threadmain(int argc, char **argv)
 	playing = 0;
 
 	loadpcm(argv[0]);
-	mkthumb();
 	setdwidth();
+	Irow = allocimage(display, Rect(0, 0, dwidth, DHEIGHT),
+		CMAP8, 0, DBlue);
 	clear();
 	redraw(0);
 	flushimage(display, 1);
@@ -138,6 +137,9 @@ threadmain(int argc, char **argv)
 			if(getwindow(display, Refnone) < 0)
 				sysfatal("resize failed: %r");
 			setdwidth();
+			freeimage(Irow);
+			Irow = allocimage(display, Rect(0, 0, dwidth, DHEIGHT),
+				CMAP8, 0, DBlue);
 			if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
 				scroll = pcmlen/(4 * ZOOMOUT*dwidth);
 			clear();
@@ -150,7 +152,6 @@ threadmain(int argc, char **argv)
 			drawcurabs();
 			flushimage(display, 1);
 			break;
-
 		}
 	}
 }
@@ -241,40 +242,17 @@ setdwidth(void)
 void
 drawpcm(Point p, ulong start)
 {
-	ulong i;
 	Rectangle r;
-	i = start;
 	r.min = p;
-	r.max.x = r.min.x + dwidth;
+	r.max.x = r.min.x + fillrow(start, dwidth);
 	r.max.y = r.min.y + DHEIGHT;
-	while (p.x < r.max.x){
-		if (i >= pcmlen/(4 * ZOOMOUT)) break;
-		if (i == curpos) drawcur(p);
-		else drawpcmbar(p, i);
-		p.x++;
-		i++;
-	}
+	draw(screen, r, Irow, 0, ZP);
+	return;
 }
 
 
-void
-drawpcmbar(Point p, ulong i)
-{
-	Rectangle r, rr;
-	r = Rpt(p, addpt(p, Pt(1, DHEIGHT)));
-	rr = rectaddpt(thumb[i], p);
-	draw(screen, r, Itrbg, 0, ZP);
-	draw(screen, rr, Itrfg, 0, ZP);
-	yieldcounter++;
-	if (yieldcounter >= 1024) {
-		flushimage(display, 0);
-		yieldcounter = 0;
-		yield();
-	}
-}
-
-
-Point getcurxy()
+Point
+getcurxy()
 {
 	Point p;
 	p = addpt(screen->r.min, Pt(4,4));
@@ -302,8 +280,11 @@ drawcurabs(void)
 void
 clearcurabs(void)
 {
+	Point p;
 	if (curpos < scroll *dwidth) return;
-	drawpcmbar(getcurxy(), curpos);
+	p = getcurxy();
+	fillrow(curpos, 2);
+	draw(screen, Rpt(p, addpt(p, Pt(1, DHEIGHT))), Irow, 0, ZP);
 }
 
 
@@ -318,6 +299,7 @@ redraw(ulong d)
 		d += dwidth;
 		p.y += DHEIGHT + 4;
 	}
+	drawcurabs();
 }
 
 
@@ -339,30 +321,49 @@ loadpcm(char *path)
 }
 
 
-void
-mkthumb(void)
+
+int
+fillrow(ulong start, ulong width)
 {
 	s8int *pp;
-	Rectangle *thmp;
 	s8int min, max;
-	ulong i;
-	pp = pcm+1;
-	thmp = thumb = realloc(thumb, sizeof(Rectangle)*pcmlen/(4*ZOOMOUT));
+	uint dmin, dmax;
+	long end;
+	ulong i, j, bsize;
+	u8int *buf;
+	u8int *bp;
+	end = (start + width) * ZOOMOUT * 4;
+	if (end > pcmlen) end = pcmlen;
+	pp = pcm + 1 + start * ZOOMOUT * 4;
+	bsize = width * Dy(Irow->r);
+	buf = malloc(bsize);
+	bp = buf;
 	i = 0;
 	min = 0x7f;
 	max = -0x7f;
-	while (pp < pcm+pcmlen){
+	while (pp < pcm + pcmlen) {
+		if (pp > pcm + end) break;
+		if (bp > buf + width) break;
 		if (min > *pp) min = *pp;
 		if (max < *pp) max = *pp;
-		pp += 2;
-		if (i==(ZOOMOUT * 2)){
+		if (i >= ZOOMOUT * 2) {
 			i = 0;
-			*thmp = Rect(0, min * DHEIGHT / 256 + DHEIGHT/2,
-				1, max * DHEIGHT / 256 + DHEIGHT/2 + 1);
-			thmp++;
-			min = 0x7fff;
-			max = -0x7fff;
+			dmin = min * DHEIGHT / 256 + DHEIGHT/2;
+			dmax = max * DHEIGHT / 256 + DHEIGHT/2;
+			for (j = 0; j < dmin; j++) *(bp + j * width) = 0xff;
+			for (j = dmin; j <= dmax; j++) *(bp + j * width) = 0x00;
+			for (j = dmax+1; j < Dy(Irow->r); j++) *(bp + j * width) = 0xff;
+			min = 0x7f;
+			max = -0x7f;
+			bp++;
 		}
-		i++;
+		else i++;
+		pp+=2;
 	}
+	Rectangle r;
+	r = Irow->r;
+	r.max.x = r.min.x + width;
+	loadimage(Irow, r, buf, bsize);
+	free(buf);
+	return bp - buf;
 }
