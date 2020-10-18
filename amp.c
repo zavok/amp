@@ -18,8 +18,10 @@ struct Fetchctl {
 };
 
 s8int *pcm, *pp;
+u8int *mono8;
 long pcmlen, scroll, curpos;
 Image *Ibg, *Itrbg, *Itrfg, *Icur, *Irow;
+Rectangle rbars;
 int dwidth;
 int yieldcounter;
 long playing;
@@ -32,12 +34,15 @@ void drawcur(Point);
 void drawcurabs(void);
 void clearcurabs(void);
 void redraw(ulong);
+void resize(void);
 void loadpcm(char*);
+u8int* mkmono8(s8int*, long);
 Point getcurxy(void);
 void threadplay(void*);
 void threadfetch(void*);
 Fetchctl* initfetch(void);
 int fillrow(ulong, ulong);
+void drawscroll(int);
 
 void
 threadmain(int argc, char **argv)
@@ -55,6 +60,9 @@ threadmain(int argc, char **argv)
 		usage();
 		break;
 	}ARGEND;
+
+	loadpcm(argv[0]);
+	mono8 = mkmono8(pcm, pcmlen);
 
 	if (argc <= 0) usage();
 	if(initdraw(0, 0, "amp") < 0)
@@ -74,8 +82,7 @@ threadmain(int argc, char **argv)
 	curpos = 0;
 	playing = 0;
 
-	loadpcm(argv[0]);
-	setdwidth();
+	resize();
 	Irow = allocimage(display, Rect(0, 0, dwidth, DHEIGHT),
 		CMAP8, 0, DBlue);
 	clear();
@@ -117,31 +124,21 @@ threadmain(int argc, char **argv)
 				nbsend(fctl->c, &playing);
 			}
 			if (mv.buttons == 8) { /* scroll up */
-				if (scroll == 0) break;
-				scroll--;
-				if (scroll < 0) scroll = 0;
-				clear();
-				redraw(scroll * dwidth);
+				drawscroll(-1);
 				flushimage(display, 1);
 			}
 			if (mv.buttons == 16) { /* scroll down */
-				scroll++;
-				if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
-					scroll = pcmlen/(4 * ZOOMOUT*dwidth);
-				clear();
-				redraw(scroll * dwidth);
+				drawscroll(1);
 				flushimage(display, 1);
 			}
 			break;
 		case 2: /* resize */
 			if(getwindow(display, Refnone) < 0)
 				sysfatal("resize failed: %r");
-			setdwidth();
+			resize();
 			freeimage(Irow);
 			Irow = allocimage(display, Rect(0, 0, dwidth, DHEIGHT),
 				CMAP8, 0, DBlue);
-			if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
-				scroll = pcmlen/(4 * ZOOMOUT*dwidth);
 			clear();
 			redraw(scroll * dwidth);
 			flushimage(display, 1);
@@ -154,6 +151,23 @@ threadmain(int argc, char **argv)
 			break;
 		}
 	}
+}
+
+
+void
+resize(void)
+{
+	int height;
+	setdwidth();
+	rbars = screen->r;
+	rbars.min.x += 4;
+	rbars.max.x -= 4;
+	height = Dy(screen->r) / (DHEIGHT + 4) * (DHEIGHT + 4);
+	rbars.min.y += (Dy(screen->r) - height) / 2;
+	rbars.max.y = rbars.min.y + height;
+
+	if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
+		scroll = pcmlen/(4 * ZOOMOUT*dwidth);
 }
 
 
@@ -174,6 +188,7 @@ threadplay(void *v)
 		write(devaudio, buf, 1024);
 	}
 }
+
 
 void
 threadfetch(void* v)
@@ -203,6 +218,7 @@ threadfetch(void* v)
 	}
 }
 
+
 Fetchctl*
 initfetch(void)
 {
@@ -216,6 +232,7 @@ initfetch(void)
 	threadcreate(threadfetch, fctl, 64 * 1024);
 	return fctl;
 }
+
 
 void
 usage(void)
@@ -235,7 +252,7 @@ clear(void)
 void
 setdwidth(void)
 {
-	dwidth = screen->r.max.x - screen->r.min.x - 8;
+	dwidth = Dx(screen->r) - 8;
 }
 
 
@@ -255,7 +272,7 @@ Point
 getcurxy()
 {
 	Point p;
-	p = addpt(screen->r.min, Pt(4,4));
+	p = rbars.min;
 	p.x += curpos%dwidth;
 	p.y += (curpos/dwidth - scroll)*(DHEIGHT + 4);
 	return p;
@@ -292,8 +309,8 @@ void
 redraw(ulong d)
 {
 	Point p;
-	p = addpt(screen->r.min, Pt(4,4));
-	while (p.y < screen->r.max.y - DHEIGHT) {
+	p = rbars.min;
+	while (p.y < screen->r.max.y - (DHEIGHT)) {
 		if (d > pcmlen/(4 * ZOOMOUT)) break;
 		drawpcm(p, d);
 		d += dwidth;
@@ -321,44 +338,35 @@ loadpcm(char *path)
 }
 
 
-
 int
 fillrow(ulong start, ulong width)
 {
-	s8int *pp;
-	s8int min, max;
+	u8int min, max;
 	uint dmin, dmax;
-	long end;
-	ulong i, j, bsize;
-	u8int *buf;
-	u8int *bp;
-	end = (start + width) * ZOOMOUT * 4;
-	if (end > pcmlen) end = pcmlen;
-	pp = pcm + 1 + start * ZOOMOUT * 4;
+	long end, bsize;
+	ulong n, i, j;
+	u8int *buf, *bp;
+	end = (start + width) * ZOOMOUT;
+	if (end > pcmlen / 4) end = pcmlen / 4;
 	bsize = width * Dy(Irow->r);
 	buf = malloc(bsize);
 	bp = buf;
-	i = 0;
 	min = 0x7f;
 	max = -0x7f;
-	while (pp < pcm + pcmlen) {
-		if (pp > pcm + end) break;
-		if (bp > buf + width) break;
-		if (min > *pp) min = *pp;
-		if (max < *pp) max = *pp;
-		if (i >= ZOOMOUT * 2) {
+	for (i=0, n=start*ZOOMOUT; (n<end)&&(bp<buf+width); n++, i++) {
+		if (min > mono8[n]) min = mono8[n];
+		if (max < mono8[n]) max = mono8[n];
+		if (i >= ZOOMOUT) {
 			i = 0;
-			dmin = min * DHEIGHT / 256 + DHEIGHT/2;
-			dmax = max * DHEIGHT / 256 + DHEIGHT/2;
+			dmin = min * DHEIGHT / 256;
+			dmax = max * DHEIGHT / 256;
 			for (j = 0; j < dmin; j++) *(bp + j * width) = 0xff;
-			for (j = dmin; j <= dmax; j++) *(bp + j * width) = 0x00;
-			for (j = dmax+1; j < Dy(Irow->r); j++) *(bp + j * width) = 0xff;
+			for (j = dmin; j < dmax; j++) *(bp + j * width) = 0x00;
+			for (j = dmax; j < Dy(Irow->r); j++) *(bp + j * width) = 0xff;
 			min = 0x7f;
 			max = -0x7f;
 			bp++;
 		}
-		else i++;
-		pp+=2;
 	}
 	Rectangle r;
 	r = Irow->r;
@@ -366,4 +374,50 @@ fillrow(ulong start, ulong width)
 	loadimage(Irow, r, buf, bsize);
 	free(buf);
 	return bp - buf;
+}
+
+
+u8int*
+mkmono8(s8int *pcm, long pcmlen)
+{
+	long i, j;
+	u8int *mono8;
+	mono8 = malloc(sizeof(s8int) * pcmlen / 4);
+	for (i = 0, j = 0; i < pcmlen; i+=4, j++) {
+		mono8[j] = (pcm[i+1] + pcm[i+3] + 256) / 2;
+	}
+	return mono8;
+}
+
+void
+drawscroll(int ds)
+{
+	Point p;
+	long pos;
+	scroll += ds;
+	if (scroll < 0) {
+		ds -= scroll;
+		scroll = 0;
+	}
+	if (scroll > pcmlen / (4 * ZOOMOUT * dwidth)) {
+		ds -=  scroll - pcmlen / (4 * ZOOMOUT * dwidth);
+		scroll = pcmlen / (4 * ZOOMOUT * dwidth);
+	}
+	if (ds == 0) return;
+	p = addpt(rbars.min, Pt(0, ds * (DHEIGHT+4)));
+	draw(screen, rbars, screen, 0, p);
+	if (ds < 0) {
+		p = rbars.min;
+		pos = dwidth * scroll;
+		ds = - ds;
+	} else {
+		p = Pt(rbars.min.x, rbars.max.y - ds * (DHEIGHT + 4));
+		pos = dwidth * (scroll - ds + Dy(rbars) / (DHEIGHT + 4));
+		draw(screen, Rpt(p, rbars.max), Ibg, 0, ZP);
+	}
+	for (; ds > 0; ds--){
+		drawpcm(p, pos);
+		p.y += DHEIGHT + 4;
+		pos += dwidth;
+	}
 }
