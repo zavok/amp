@@ -58,8 +58,9 @@ threadmain(int argc, char **argv)
 	ARGBEGIN{
 	default:
 		usage();
-		break;
 	}ARGEND;
+
+	if (argc == 0) usage();
 
 	loadpcm(argv[0]);
 	mono8 = mkmono8(pcm, pcmlen);
@@ -163,7 +164,7 @@ resize(void)
 	rbars.min.x += 4;
 	rbars.max.x -= 4;
 	height = Dy(screen->r) / (DHEIGHT + 4) * (DHEIGHT + 4);
-	rbars.min.y += (Dy(screen->r) - height) / 2;
+	rbars.min.y += 2 + (Dy(screen->r) - height) / 2;
 	rbars.max.y = rbars.min.y + height;
 
 	if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
@@ -420,4 +421,5 @@ drawscroll(int ds)
 		p.y += DHEIGHT + 4;
 		pos += dwidth;
 	}
+	drawcurabs();
 }
