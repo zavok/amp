@@ -1,9 +1,10 @@
 </$objtype/mkfile
 
-TARG=amp
+TARG=fs
 
-OFILES=\
-	amp.$O\
+OFILES=pages.$O
+HFILES=pages.h
 
 BIN=/$objtype/bin
-</sys/src/cmd/mkone
+
+</sys/src/cmd/mkmany
