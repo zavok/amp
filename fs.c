@@ -15,7 +15,7 @@ PBuf pg;
 struct {
 	int min;
 	int max;
-	char str[32];
+	char str[12*3+1]; // see update_selstr
 } sel;
 
 void fs_read(Req *r);
@@ -67,7 +67,15 @@ fs_read(Req *r)
 		  r->ifcall.count, r->ifcall.offset);
 		respond(r, nil);
 	} else if (r->fid->file == fcut) {
-		respond(r, "fcut nope");
+		vlong min = sel.min * FrameSize;
+		vlong max = sel.max * FrameSize;
+		r->ifcall.offset += min;
+		if (r->ifcall.offset + r->ifcall.count > max)
+			r->ifcall.count = max - r->ifcall.offset;
+		if (r->ifcall.offset > max) r->ifcall.count = 0;
+		r->ofcall.count = pbread(&pg, r->ofcall.data,
+		  r->ifcall.count, r->ifcall.offset);
+		respond(r, nil);
 	} else if (r->fid->file == fctl) {
 		readstr(r, sel.str);
 		respond(r, nil);
@@ -118,16 +126,17 @@ fs_write(Req *r)
 void
 normalize_sel(void)
 {
+	vlong bufmax = pg.count / FrameSize;
 	if (sel.min > sel.max) {
 		int x = sel.max;
-		sel.max = sel.min;
-		sel.min = x;
-	};
-	// TODO: should check max is not bigger than total buffer size
+		sel.max = (sel.min > bufmax) ? bufmax : sel.min;
+		sel.min = (x > bufmax) ? bufmax : x;
+	}
 }
 
 void
 update_selstr(void)
 {
-	snprint(sel.str, sizeof(sel.str), "%11d %11d ", sel.min, sel.max);
+	snprint(sel.str, sizeof(sel.str), "%11d %11d %11d \n",
+	  sel.min, sel.max, (int)(pg.count / FrameSize));
 }

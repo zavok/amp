@@ -20,7 +20,7 @@ struct PBuf {
 	Page *end;
 	vlong size; // how many bytes were allocated in total
 	vlong count; // how many bytes are used for storage
-	//              count <= size
+	//              should be count ≤ size
 };
 
 long pbwrite(PBuf *pb, void *buf, long nbytes, vlong offset); 
