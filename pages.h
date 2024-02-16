@@ -19,7 +19,7 @@ struct PBuf {
 	Page *start;
 	Page *end;
 	vlong size; // how many bytes were allocated in total
-	vlong count; // how many bytes are used for storage
+	vlong length; // how many bytes are used for storage
 	//              should be count ≤ size
 };
 

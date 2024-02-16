@@ -18,6 +18,7 @@ struct {
 	char str[12*3+1]; // see update_selstr
 } sel;
 
+void fs_open(Req *r);
 void fs_read(Req *r);
 void fs_write(Req *r);
 
@@ -27,10 +28,12 @@ void update_selstr(void);
 Srv ampsrv = {
 	.read = fs_read,
 	.write = fs_write,
-	// .open/.create (???) for handling truncating
+	//.create = fs_create,
+	.open = fs_open,
 };
 
-File *fdata, *fcut, *fctl; 
+File *fdata, *fcut, *fctl;
+char *service, *mountpath = "/mnt/amp";
 
 void
 usage(void)
@@ -46,17 +49,44 @@ threadmain(int argc, char **argv)
 	case 'D':
 		chatty9p++;
 		break;
+	case 's':
+		service = EARGF(usage());
+		break;
+	case 'm':
+		mountpath = EARGF(usage());
+		break;
 	default: usage();
 	} ARGEND
 	if (argc != 0) usage();
-
 	update_selstr();
-
 	ampsrv.tree = alloctree("amp", "amp", DMDIR|0555, nil);
 	fdata = createfile(ampsrv.tree->root, "data", "amp", 0666, nil);
 	fcut = createfile(ampsrv.tree->root, "cut", "amp", 0666, nil);
 	fctl = createfile(ampsrv.tree->root, "ctl", "amp", 0666, nil);
-	threadpostmountsrv(&ampsrv, "amp", "/mnt/amp", MREPL);
+	threadpostmountsrv(&ampsrv, service, mountpath, MREPL);
+}
+
+void
+fs_open(Req *r)
+{
+	char *rstr = nil;
+	File *file = r->fid->file;
+	uchar mode = r->ifcall.mode;
+	if ((mode & OTRUNC) == 0) goto end;
+	if (file == fctl) goto end;
+	if (file == fcut) {
+		rstr = "trunc not implemented yet";
+		goto end;
+	}
+	if (file == fdata) {
+		pg.length = 0;
+		// TODO: free pages ???
+		// probably better to do it on fs_close()
+		goto end;
+	}
+	rstr = "what";
+end:
+	respond(r, rstr);
 }
 
 void
@@ -90,7 +120,7 @@ fs_write(Req *r)
 	if (r->fid->file == fdata) {
 		r->ofcall.count = pbwrite(&pg, r->ifcall.data,
 		  r->ifcall.count, r->ifcall.offset);
-		if (pg.count > fdata->length) fdata->length = pg.count;
+		if (pg.length > fdata->length) fdata->length = pg.length;
 		respond(r, nil);
 	} else if (r->fid->file == fcut) {
 		respond(r, "fcut nope");
@@ -116,6 +146,7 @@ fs_write(Req *r)
 		sel.max = newmax;
 		normalize_sel();
 		update_selstr();
+		fcut->length = (sel.max - sel.min) * FrameSize;
 		r->ofcall.count = r->ifcall.count;
 		respond(r, nil);
 	} else {
@@ -126,11 +157,13 @@ fs_write(Req *r)
 void
 normalize_sel(void)
 {
-	vlong bufmax = pg.count / FrameSize;
+	vlong bufmax = pg.length / FrameSize;
+	if (sel.min > bufmax) sel.min = bufmax;
+	if (sel.max > bufmax) sel.max = bufmax;
 	if (sel.min > sel.max) {
 		int x = sel.max;
-		sel.max = (sel.min > bufmax) ? bufmax : sel.min;
-		sel.min = (x > bufmax) ? bufmax : x;
+		sel.max = sel.min;
+		sel.min = x;
 	}
 }
 
@@ -138,5 +171,5 @@ void
 update_selstr(void)
 {
 	snprint(sel.str, sizeof(sel.str), "%11d %11d %11d \n",
-	  sel.min, sel.max, (int)(pg.count / FrameSize));
+	  sel.min, sel.max, (int)(pg.length / FrameSize));
 }

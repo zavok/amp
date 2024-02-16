@@ -22,7 +22,7 @@ pbwrite(PBuf *pb, void *buf, long nbytes, vlong offset)
 		addpage(pb);
 	}
 	pgpt = pb->start;
-	if (pb->count < offset + nbytes) pb->count = offset + nbytes;
+	if (pb->length < offset + nbytes) pb->length = offset + nbytes;
 	while (nbytes > 0) {
 		assert(page_offset <= offset);
 		if (page_offset + pgpt->count > offset) {
@@ -48,9 +48,9 @@ pbread(PBuf *pb, void *buf, long nbytes, vlong offset)
 {
 	Page *pgpt = pb->start;
 	long n, nread = 0;
-	if (offset >= pb->count) nbytes = 0;
-	if (offset + nbytes >= pb->count) {
-		nbytes = (pb->count - offset);
+	if (offset >= pb->length) nbytes = 0;
+	if (offset + nbytes >= pb->length) {
+		nbytes = (pb->length - offset);
 	}
 	while (nbytes > 0) {
 		if (pgpt == nil) {
