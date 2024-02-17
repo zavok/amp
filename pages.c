@@ -3,42 +3,106 @@
 
 #include "pages.h"
 
+Array *
+allocarray(long len)
+{
+	Array *new = malloc(sizeof(ArHeader) + len);
+	assert(new != nil);
+	new->len = len;
+	new->ref = 0;
+	return new;
+}
+
+ArSlice *
+allocarslice(Array *ar, long start, long len)
+{
+	ArSlice *new = malloc(sizeof(ArSlice));
+	new->ar = ar;
+	new->p = ar->p + start;
+	new->len = len;
+	new->cap = ar->len - start;
+	assert(start + len <= ar->len);
+	return new;
+}
+
 Page *
 allocpage(void)
 {
-	Page *new = mallocz(sizeof(Page), 1);
-	new->count = PageSize;
-	new->buf = mallocz(PageSize, 1);
+	Array *ar = allocarray(PageSize);
+	memset(ar->p, '?', PageSize);
+	ArSlice *as = allocarslice(ar, 0, PageSize);
+	ar->ref++;
+	Page *new = malloc(sizeof(Page));
+	new->as = as;
+	new->prev = nil;
+	new->next = nil;
 	return new;
+}
+
+Page *
+duppage(Page *old)
+{
+	Page *new = malloc(sizeof(Page));
+	ArSlice *as = malloc(sizeof(ArSlice));
+	new->as = as;
+	new->prev = old->prev;
+	new->next = old->next;
+	as->ar = old->as->ar;
+	as->p = old->as->p;
+	as->len = old->as->len;
+	as->cap = old->as->cap;
+	as->ar->ref++;
+	return new;
+}
+
+void
+freepage(Page *pg)
+{
+	pg->as->ar->ref--;
+	if (pg->as->ar->ref <= 0) {
+		free(pg->as->ar);
+	}
+	free(pg->as);
+	free(pg);
 }
 
 long
 pbwrite(PBuf *pb, void *buf, long nbytes, vlong offset)
 {
 	Page *pgpt;
-	vlong page_offset = 0;
 	long n, nwritten = 0;
+
+	// TODO: move this section to fs.c/fwrite/fdata
+	// or create separate pbgrow() function
+	// also, last page's len should be shortened accordingly
+	// [[[
 	while (offset + nbytes > pb->size) {
 		addpage(pb);
 	}
-	pgpt = pb->start;
 	if (pb->length < offset + nbytes) pb->length = offset + nbytes;
-	while (nbytes > 0) {
-		assert(page_offset <= offset);
-		if (page_offset + pgpt->count > offset) {
-			n = page_offset + pgpt->count - offset;
-			if (n > nbytes) n = nbytes;
-			memcpy(pgpt->buf, buf, n);
-			nwritten += n;
-			buf = (char *)buf + n;
-			offset +=n;
-			nbytes -= n;
-		}
-		page_offset += pgpt->count;
-		pgpt = pgpt->next;
+	// ]]]
+
+	pgpt = pb->start;
+	if (offset >= pb->length) nbytes = 0;
+	if (offset + nbytes >= pb->length) {
+		nbytes = (pb->length - offset);
 	}
-	if (offset > pb->size) {
-		pb->size = offset;
+	while (nbytes > 0) {
+		if (pgpt == nil) {
+			break;
+		}
+		if (offset >= pgpt->as->len) {
+			offset -= pgpt->as->len;
+			pgpt = pgpt->next;
+			continue;
+		}
+		n = nbytes;
+		if (pgpt->as->len - offset < n) n = pgpt->as->len - offset;
+		memcpy(pgpt->as->p + offset, buf, n);
+		nwritten += n;
+		buf = (char *)buf + n;
+		offset += n;
+		nbytes -= n;
 	}
 	return nwritten;
 }
@@ -56,14 +120,14 @@ pbread(PBuf *pb, void *buf, long nbytes, vlong offset)
 		if (pgpt == nil) {
 			break;
 		}
-		if (offset >= pgpt->count) {
-			offset -= pgpt->count;
+		if (offset >= pgpt->as->len) {
+			offset -= pgpt->as->len;
 			pgpt = pgpt->next;
 			continue;
 		}
 		n = nbytes;
-		if (pgpt->count - offset < n) n = pgpt->count - offset;
-		memcpy(buf, pgpt->buf + offset, n);
+		if (pgpt->as->len - offset < n) n = pgpt->as->len - offset;
+		memcpy(buf, pgpt->as->p + offset, n);
 		nread += n;
 		buf = (char *)buf + n;
 		offset += n;
@@ -76,13 +140,14 @@ Page *
 addpage(PBuf *pb)
 {
 	Page *new = allocpage();
-	if (pb->start == nil) pb->start = new;
-	if (pb->end == nil) pb->end = new;
-	else {
+	if ((pb->start == nil) || (pb->end == nil)) {
+		pb->start = new;
+		pb->end = new;
+	} else {
 		new->prev = pb->end;
 		pb->end->next = new;
 		pb->end = new;
 	}
-	pb->size += new->count;
+	pb->size += new->as->len;
 	return new;
 }

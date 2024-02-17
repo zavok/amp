@@ -22,13 +22,14 @@ void fs_open(Req *r);
 void fs_read(Req *r);
 void fs_write(Req *r);
 
+void fcut_write(Req *r);
+
 void normalize_sel(void);
 void update_selstr(void);
 
 Srv ampsrv = {
 	.read = fs_read,
 	.write = fs_write,
-	//.create = fs_create,
 	.open = fs_open,
 };
 
@@ -75,11 +76,14 @@ fs_open(Req *r)
 	if ((mode & OTRUNC) == 0) goto end;
 	if (file == fctl) goto end;
 	if (file == fcut) {
+		// if needed split pages at 'min' and 'max' in two
+		// remove pages from min to max
 		rstr = "trunc not implemented yet";
 		goto end;
 	}
 	if (file == fdata) {
 		pg.length = 0;
+		fdata->length = 0;
 		// TODO: free pages ???
 		// probably better to do it on fs_close()
 		goto end;
@@ -121,9 +125,12 @@ fs_write(Req *r)
 		r->ofcall.count = pbwrite(&pg, r->ifcall.data,
 		  r->ifcall.count, r->ifcall.offset);
 		if (pg.length > fdata->length) fdata->length = pg.length;
+		update_selstr();
 		respond(r, nil);
 	} else if (r->fid->file == fcut) {
-		respond(r, "fcut nope");
+		fcut_write(r);
+		update_selstr();
+		respond(r, nil);
 	} else if (r->fid->file == fctl) {
 		int newmin, newmax;
 		char *np, *rp;
@@ -152,6 +159,64 @@ fs_write(Req *r)
 	} else {
 		respond(r, "nope");
 	}
+}
+
+void
+fcut_write(Req *r)
+{
+	Page *maxpage;
+	vlong min, max, offset;
+	long count, d;
+	min = sel.min * FrameSize;
+	max = sel.max * FrameSize;
+
+	// find page that 'max' lands on
+	offset = 0;
+	maxpage = pg.start;
+	while ((maxpage != nil) && (offset + maxpage->as->len < max)) {
+		offset += maxpage->as->len;
+		maxpage = maxpage->next;
+	}
+	if (maxpage == nil) {
+		maxpage = addpage(&pg);
+	}
+	d = max - offset;
+	if (d > 0) {
+		// split page in two
+		Page *s = duppage(maxpage);
+		s->as->len = d;
+		s->next = maxpage;
+		if (s->prev != nil) s->prev->next = s;
+		else pg.start = s;
+		maxpage->as->len -= d;
+		maxpage->as->cap -= d;
+		maxpage->as->p += d;
+		maxpage->prev = s;
+	}
+	// insert more pages as needed
+	offset = r->ifcall.offset + min;
+	count = r->ifcall.count;
+	while (offset + count > max) {
+		long n = offset + count - max;
+		if (n > PageSize) n = PageSize;
+		Page *ins = allocpage();
+		ins->as->len = n;
+		ins->next = maxpage;
+		ins->prev = maxpage->prev;
+		if (maxpage->prev != nil) maxpage->prev->next = ins;
+		else {
+			pg.start = ins;
+		}
+		maxpage->prev = ins;
+		max += n;
+		pg.length  += n;
+	}
+	sel.max = max / FrameSize;
+	normalize_sel();
+	fcut->length = (sel.max - sel.min) * FrameSize;
+	fdata->length = pg.length;
+	// write to pagebuffer as usual
+	r->ofcall.count = pbwrite(&pg, r->ifcall.data, count, offset);
 }
 
 void
