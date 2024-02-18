@@ -151,3 +151,29 @@ addpage(PBuf *pb)
 	pb->size += new->as->len;
 	return new;
 }
+
+Page *
+splitpage(PBuf *pb, vlong offset)
+{
+	vlong d, count = 0;
+	Page *sp = pb->start;
+	// find page at offset
+	while ((sp != nil) && (count + sp->as->len < offset)) {
+		count += sp->as->len;
+		sp = sp->next;
+	}
+	if (sp == nil) return nil;
+	d = offset - count;
+	if (d > 0) {
+		Page *np = duppage(sp);
+		np->as->len = d;
+		np->next = sp;
+		if (np->prev != nil) np->prev->next = np;
+		else pb->start = np;
+		sp->as->len -= d;
+		sp->as->cap -= d;
+		sp->as->p += d;
+		sp->prev = np;
+	}
+	return sp;
+}

@@ -22,6 +22,7 @@ void fs_open(Req *r);
 void fs_read(Req *r);
 void fs_write(Req *r);
 
+void fcut_open(Req *r);
 void fcut_write(Req *r);
 
 void normalize_sel(void);
@@ -73,14 +74,12 @@ fs_open(Req *r)
 	char *rstr = nil;
 	File *file = r->fid->file;
 	uchar mode = r->ifcall.mode;
-	if ((mode & OTRUNC) == 0) goto end;
-	if (file == fctl) goto end;
 	if (file == fcut) {
-		// if needed split pages at 'min' and 'max' in two
-		// remove pages from min to max
-		rstr = "trunc not implemented yet";
+		fcut_open(r);
 		goto end;
 	}
+	if ((mode & OTRUNC) == 0) goto end;
+	if (file == fctl) goto end;
 	if (file == fdata) {
 		pg.length = 0;
 		fdata->length = 0;
@@ -162,36 +161,50 @@ fs_write(Req *r)
 }
 
 void
+fcut_open(Req *r)
+{
+	vlong min, max;
+	min = sel.min * FrameSize;
+	max = sel.max * FrameSize;
+
+	if ((r->ifcall.mode & OTRUNC) != 0) {
+		Page *maxpg = splitpage(&pg, max);
+		Page *minpg = splitpage(&pg, min);
+		assert(minpg != nil);
+		assert(maxpg != nil);
+		if (minpg->prev != nil) {
+			minpg->prev->next = maxpg;
+			maxpg->prev = minpg->prev;
+		} else {
+			pg.start = maxpg;
+			maxpg->prev = nil;
+		}
+		while (minpg != maxpg) {
+			Page *fp = minpg;
+			fp->as->len = 0;
+			minpg = fp->next;
+			freepage(fp);
+		}
+		pg.length -= max - min;
+		fdata->length = pg.length;
+		fcut->length = 0;
+		sel.max = sel.min;
+		normalize_sel();
+	}
+}
+
+void
 fcut_write(Req *r)
 {
 	Page *maxpage;
 	vlong min, max, offset;
-	long count, d;
+	long count;
 	min = sel.min * FrameSize;
 	max = sel.max * FrameSize;
 
-	// find page that 'max' lands on
-	offset = 0;
-	maxpage = pg.start;
-	while ((maxpage != nil) && (offset + maxpage->as->len < max)) {
-		offset += maxpage->as->len;
-		maxpage = maxpage->next;
-	}
+	maxpage = splitpage(&pg, max);
 	if (maxpage == nil) {
 		maxpage = addpage(&pg);
-	}
-	d = max - offset;
-	if (d > 0) {
-		// split page in two
-		Page *s = duppage(maxpage);
-		s->as->len = d;
-		s->next = maxpage;
-		if (s->prev != nil) s->prev->next = s;
-		else pg.start = s;
-		maxpage->as->len -= d;
-		maxpage->as->cap -= d;
-		maxpage->as->p += d;
-		maxpage->prev = s;
 	}
 	// insert more pages as needed
 	offset = r->ifcall.offset + min;

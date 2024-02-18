@@ -52,3 +52,4 @@ Page * allocpage(void);
 Page * duppage(Page *);
 void freepage(Page *);
 Page * addpage(PBuf *pb);
+Page * splitpage(PBuf *pb, vlong offset);
