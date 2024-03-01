@@ -6,22 +6,8 @@
 #include <cursor.h>
 #include <keyboard.h>
 
-#include "amp.h"
-
 #define DHeight 32
 #define Zoomout 512
-
-typedef struct Fetchctl Fetchctl;
-struct Fetchctl {
-	long state;
-	Channel *c;
-	Channel *plchan;
-	Channel *pos;
-};
-
-struct {
-	
-} ampscreen;
 
 s8int *pcm, *pp;
 u8int *mono8;
@@ -29,21 +15,6 @@ long pcmlen, scroll, curpos;
 Image *Ibg, *Itrbg, *Itrfg, *Icur, *Irow;
 Rectangle rbars;
 int dwidth;
-int yieldcounter;
-long playing;
-
-struct Amp {
-	Pcm pcm;
-	struct Player {
-		void *cursor;
-		int state;
-	} pl;
-	struct Selection {
-		long start;
-		long end;
-	} sel;
-	double zoom;
-} amp;
 
 void usage(void);
 void clear(void);
@@ -57,9 +28,6 @@ void resize(void);
 void loadpcm(char*);
 u8int* mkmono8(s8int*, long);
 Point getcurxy(void);
-void threadplay(void*);
-void threadfetch(void*);
-Fetchctl* initfetch(void);
 int fillrow(ulong, ulong);
 void drawscroll(int);
 
@@ -68,11 +36,9 @@ threadmain(int argc, char **argv)
 {
 	Mousectl *mctl;
 	Keyboardctl *kctl;
-	Fetchctl *fctl;
 	Mouse mv;
 	Rune  kv;
 	int   rv[2];
-	long pv;
 
 	ARGBEGIN{
 	default:
@@ -91,8 +57,6 @@ threadmain(int argc, char **argv)
 		sysfatal("initmouse failed: %r");
 	if((kctl = initkeyboard(0)) == nil)
 		sysfatal("initkeyboard failed: %r");
-	if((fctl = initfetch()) == nil)
-		sysfatal("initfetch failed: %r");
 
 	Ibg = allocimage(display, Rect(0,0,1,1), RGB24, 1, 0xBBBBBBFF);
 	Itrbg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DWhite);
@@ -100,7 +64,6 @@ threadmain(int argc, char **argv)
 	Icur = allocimage(display, Rect(0,0,1,1), RGB24, 1, DRed);
 
 	curpos = 0;
-	playing = 0;
 
 	resize();
 	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
@@ -112,7 +75,6 @@ threadmain(int argc, char **argv)
 		{kctl->c, &kv, CHANRCV},
 		{mctl->c, &mv, CHANRCV},
 		{mctl->resizec, rv, CHANRCV},
-		{fctl->pos, &pv, CHANRCV},
 		{0, 0, CHANEND},
 	};
 	for (;;) {
@@ -122,10 +84,8 @@ threadmain(int argc, char **argv)
 			break;
 		case 1: /* mouse */
 			if (mv.buttons == 0) {
-				nbsend(fctl->c, &playing);
 			}
 			if (mv.buttons == 1) {
-				nbsendul(fctl->c, 0);
 				clearcurabs();
 				long mrow = (mv.xy.y - screen->r.min.y) / (DHeight + 4);
 				long mx = mv.xy.x - screen->r.min.x - 4;
@@ -140,8 +100,6 @@ threadmain(int argc, char **argv)
 				flushimage(display, 1);
 			}
 			if (mv.buttons == 4) {
-				playing = (playing)? 0 : 1;
-				nbsend(fctl->c, &playing);
 			}
 			if (mv.buttons == 8) { /* scroll up */
 				drawscroll(-1);
@@ -163,16 +121,9 @@ threadmain(int argc, char **argv)
 			redraw(scroll * dwidth);
 			flushimage(display, 1);
 			break;
-		case 3: /* position change */
-			clearcurabs();
-			curpos = pv / (4 * Zoomout);
-			drawcurabs();
-			flushimage(display, 1);
-			break;
 		}
 	}
 }
-
 
 void
 resize(void)
@@ -190,70 +141,6 @@ resize(void)
 		scroll = pcmlen/(4 * Zoomout*dwidth);
 }
 
-
-void
-threadplay(void *v)
-{
-	Channel *c;
-	s8int buf[1024];
-	int devaudio;
-	c = v;
-	devaudio = open("/dev/audio", OWRITE);
-	if (devaudio <= 0){
-		fprint(2, "can't open /dev/audio\n");
-		return;
-	}
-	for (;;) {
-		recv(c, buf);
-		write(devaudio, buf, 1024);
-	}
-}
-
-
-void
-threadfetch(void* v)
-{
-	long pos, len, newstate;
-	s8int buf[1024];
-	Fetchctl *fctl;
-	fctl = v;
-	for (;;) {
-		recv(fctl->c, &newstate);
-		fctl->state = newstate;
-		while (fctl->state != 0) {
-			if (nbrecv(fctl->c, &newstate) > 0)	fctl->state = newstate;
-			memset(buf, 0, 1024);
-			len = (pp + 1024 < pcm + pcmlen) ? 1024 : pcm + pcmlen - pp;
-			memcpy(buf, pp, len);
-			pp += len;
-			if (pp >= pcm+pcmlen) {
-				pp = pcm;
-				fctl->state = 0;
-				playing = 0;
-			}
-			pos = pp-pcm;
-			nbsend(fctl->pos, &pos);
-			send(fctl->plchan, buf);
-		}
-	}
-}
-
-
-Fetchctl*
-initfetch(void)
-{
-	Fetchctl *fctl;
-	fctl = malloc(sizeof(Fetchctl));
-	fctl->state = 0;
-	fctl->plchan = chancreate(1024, 0);
-	fctl->pos = chancreate(sizeof(long), 0);
-	fctl->c = chancreate(sizeof(long), 16);
-	threadcreate(threadplay, fctl->plchan, 64 * 1024);
-	threadcreate(threadfetch, fctl, 64 * 1024);
-	return fctl;
-}
-
-
 void
 usage(void)
 {
@@ -261,20 +148,17 @@ usage(void)
 	threadexitsall("usage");
 }
 
-
 void
 clear(void)
 {
 	draw(screen, screen->r, Ibg, 0, ZP);
 }
 
-
 void
 setdwidth(void)
 {
 	dwidth = Dx(screen->r) - 8;
 }
-
 
 void
 drawpcm(Point p, ulong start)
@@ -287,7 +171,6 @@ drawpcm(Point p, ulong start)
 	return;
 }
 
-
 Point
 getcurxy()
 {
@@ -298,13 +181,11 @@ getcurxy()
 	return p;
 }
 
-
 void
 drawcur(Point p)
 {
 	draw(screen, Rpt(p, addpt(p, Pt(1, DHeight))), Icur, 0, ZP);
 }
-
 
 void
 drawcurabs(void)
@@ -312,7 +193,6 @@ drawcurabs(void)
 	if (curpos < scroll *dwidth) return;
 	drawcur(getcurxy());
 }
-
 
 void
 clearcurabs(void)
@@ -323,7 +203,6 @@ clearcurabs(void)
 	fillrow(curpos, 2);
 	draw(screen, Rpt(p, addpt(p, Pt(1, DHeight))), Irow, 0, ZP);
 }
-
 
 void
 redraw(ulong d)
@@ -338,7 +217,6 @@ redraw(ulong d)
 	}
 	drawcurabs();
 }
-
 
 void
 loadpcm(char *path)
@@ -357,7 +235,6 @@ loadpcm(char *path)
 	close(fd);
 	pp = pcm;
 }
-
 
 int
 fillrow(ulong start, ulong width)
@@ -396,7 +273,6 @@ fillrow(ulong start, ulong width)
 	free(buf);
 	return bp - buf;
 }
-
 
 u8int*
 mkmono8(s8int *pcm, long pcmlen)

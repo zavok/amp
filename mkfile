@@ -1,6 +1,6 @@
 </$objtype/mkfile
 
-TARG=fs
+TARG=fs amp
 
 OFILES=pages.$O
 HFILES=pages.h
