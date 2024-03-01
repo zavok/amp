@@ -6,8 +6,10 @@
 #include <cursor.h>
 #include <keyboard.h>
 
-#define DHEIGHT 32
-#define ZOOMOUT 512
+#include "amp.h"
+
+#define DHeight 32
+#define Zoomout 512
 
 typedef struct Fetchctl Fetchctl;
 struct Fetchctl {
@@ -17,6 +19,10 @@ struct Fetchctl {
 	Channel *pos;
 };
 
+struct {
+	
+} ampscreen;
+
 s8int *pcm, *pp;
 u8int *mono8;
 long pcmlen, scroll, curpos;
@@ -25,6 +31,19 @@ Rectangle rbars;
 int dwidth;
 int yieldcounter;
 long playing;
+
+struct Amp {
+	Pcm pcm;
+	struct Player {
+		void *cursor;
+		int state;
+	} pl;
+	struct Selection {
+		long start;
+		long end;
+	} sel;
+	double zoom;
+} amp;
 
 void usage(void);
 void clear(void);
@@ -84,7 +103,7 @@ threadmain(int argc, char **argv)
 	playing = 0;
 
 	resize();
-	Irow = allocimage(display, Rect(0, 0, dwidth, DHEIGHT),
+	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
 		CMAP8, 0, DBlue);
 	clear();
 	redraw(0);
@@ -108,15 +127,15 @@ threadmain(int argc, char **argv)
 			if (mv.buttons == 1) {
 				nbsendul(fctl->c, 0);
 				clearcurabs();
-				long mrow = (mv.xy.y - screen->r.min.y) / (DHEIGHT + 4);
+				long mrow = (mv.xy.y - screen->r.min.y) / (DHeight + 4);
 				long mx = mv.xy.x - screen->r.min.x - 4;
 				if (mx < 0) mx = 0;
 				if (mx >= dwidth) mx = dwidth - 1;
 				long newpos = (scroll + mrow) * dwidth + mx;
 				curpos = newpos;
-				if (curpos >= pcmlen / (ZOOMOUT * 4))
-					curpos = pcmlen / (ZOOMOUT * 4) - 1;
-				pp = pcm + curpos * (ZOOMOUT * 4);
+				if (curpos >= pcmlen / (Zoomout * 4))
+					curpos = pcmlen / (Zoomout * 4) - 1;
+				pp = pcm + curpos * (Zoomout * 4);
 				drawcurabs();
 				flushimage(display, 1);
 			}
@@ -138,7 +157,7 @@ threadmain(int argc, char **argv)
 				sysfatal("resize failed: %r");
 			resize();
 			freeimage(Irow);
-			Irow = allocimage(display, Rect(0, 0, dwidth, DHEIGHT),
+			Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
 				CMAP8, 0, DBlue);
 			clear();
 			redraw(scroll * dwidth);
@@ -146,7 +165,7 @@ threadmain(int argc, char **argv)
 			break;
 		case 3: /* position change */
 			clearcurabs();
-			curpos = pv / (4 * ZOOMOUT);
+			curpos = pv / (4 * Zoomout);
 			drawcurabs();
 			flushimage(display, 1);
 			break;
@@ -163,12 +182,12 @@ resize(void)
 	rbars = screen->r;
 	rbars.min.x += 4;
 	rbars.max.x -= 4;
-	height = Dy(screen->r) / (DHEIGHT + 4) * (DHEIGHT + 4);
+	height = Dy(screen->r) / (DHeight + 4) * (DHeight + 4);
 	rbars.min.y += 2 + (Dy(screen->r) - height) / 2;
 	rbars.max.y = rbars.min.y + height;
 
-	if (scroll > pcmlen/(4 * ZOOMOUT*dwidth))
-		scroll = pcmlen/(4 * ZOOMOUT*dwidth);
+	if (scroll > pcmlen/(4 * Zoomout*dwidth))
+		scroll = pcmlen/(4 * Zoomout*dwidth);
 }
 
 
@@ -263,7 +282,7 @@ drawpcm(Point p, ulong start)
 	Rectangle r;
 	r.min = p;
 	r.max.x = r.min.x + fillrow(start, dwidth);
-	r.max.y = r.min.y + DHEIGHT;
+	r.max.y = r.min.y + DHeight;
 	draw(screen, r, Irow, 0, ZP);
 	return;
 }
@@ -275,7 +294,7 @@ getcurxy()
 	Point p;
 	p = rbars.min;
 	p.x += curpos%dwidth;
-	p.y += (curpos/dwidth - scroll)*(DHEIGHT + 4);
+	p.y += (curpos/dwidth - scroll)*(DHeight + 4);
 	return p;
 }
 
@@ -283,7 +302,7 @@ getcurxy()
 void
 drawcur(Point p)
 {
-	draw(screen, Rpt(p, addpt(p, Pt(1, DHEIGHT))), Icur, 0, ZP);
+	draw(screen, Rpt(p, addpt(p, Pt(1, DHeight))), Icur, 0, ZP);
 }
 
 
@@ -302,7 +321,7 @@ clearcurabs(void)
 	if (curpos < scroll *dwidth) return;
 	p = getcurxy();
 	fillrow(curpos, 2);
-	draw(screen, Rpt(p, addpt(p, Pt(1, DHEIGHT))), Irow, 0, ZP);
+	draw(screen, Rpt(p, addpt(p, Pt(1, DHeight))), Irow, 0, ZP);
 }
 
 
@@ -311,11 +330,11 @@ redraw(ulong d)
 {
 	Point p;
 	p = rbars.min;
-	while (p.y < screen->r.max.y - (DHEIGHT)) {
-		if (d > pcmlen/(4 * ZOOMOUT)) break;
+	while (p.y < screen->r.max.y - (DHeight)) {
+		if (d > pcmlen/(4 * Zoomout)) break;
 		drawpcm(p, d);
 		d += dwidth;
-		p.y += DHEIGHT + 4;
+		p.y += DHeight + 4;
 	}
 	drawcurabs();
 }
@@ -326,7 +345,8 @@ loadpcm(char *path)
 {
 	long n;
 	int fd;
-	s8int buf[1024];
+	s8int *buf;
+	buf = malloc(32 * 1024);
 	fd = open(path, OREAD);
 	pcmlen = 0;
 	while((n = read(fd, buf, 1024)) > 0){
@@ -347,20 +367,20 @@ fillrow(ulong start, ulong width)
 	long end, bsize;
 	ulong n, i, j;
 	u8int *buf, *bp;
-	end = (start + width) * ZOOMOUT;
+	end = (start + width) * Zoomout;
 	if (end > pcmlen / 4) end = pcmlen / 4;
 	bsize = width * Dy(Irow->r);
 	buf = malloc(bsize);
 	bp = buf;
 	min = 0x7f;
 	max = -0x7f;
-	for (i=0, n=start*ZOOMOUT; (n<end)&&(bp<buf+width); n++, i++) {
+	for (i=0, n=start*Zoomout; (n<end)&&(bp<buf+width); n++, i++) {
 		if (min > mono8[n]) min = mono8[n];
 		if (max < mono8[n]) max = mono8[n];
-		if (i >= ZOOMOUT) {
+		if (i >= Zoomout) {
 			i = 0;
-			dmin = min * DHEIGHT / 256;
-			dmax = max * DHEIGHT / 256;
+			dmin = min * DHeight / 256;
+			dmax = max * DHeight / 256;
 			for (j = 0; j < dmin; j++) *(bp + j * width) = 0xff;
 			for (j = dmin; j < dmax; j++) *(bp + j * width) = 0x00;
 			for (j = dmax; j < Dy(Irow->r); j++) *(bp + j * width) = 0xff;
@@ -400,25 +420,25 @@ drawscroll(int ds)
 		ds -= scroll;
 		scroll = 0;
 	}
-	if (scroll > pcmlen / (4 * ZOOMOUT * dwidth)) {
-		ds -=  scroll - pcmlen / (4 * ZOOMOUT * dwidth);
-		scroll = pcmlen / (4 * ZOOMOUT * dwidth);
+	if (scroll > pcmlen / (4 * Zoomout * dwidth)) {
+		ds -=  scroll - pcmlen / (4 * Zoomout * dwidth);
+		scroll = pcmlen / (4 * Zoomout * dwidth);
 	}
 	if (ds == 0) return;
-	p = addpt(rbars.min, Pt(0, ds * (DHEIGHT+4)));
+	p = addpt(rbars.min, Pt(0, ds * (DHeight+4)));
 	draw(screen, rbars, screen, 0, p);
 	if (ds < 0) {
 		p = rbars.min;
 		pos = dwidth * scroll;
 		ds = - ds;
 	} else {
-		p = Pt(rbars.min.x, rbars.max.y - ds * (DHEIGHT + 4));
-		pos = dwidth * (scroll - ds + Dy(rbars) / (DHEIGHT + 4));
+		p = Pt(rbars.min.x, rbars.max.y - ds * (DHeight + 4));
+		pos = dwidth * (scroll - ds + Dy(rbars) / (DHeight + 4));
 		draw(screen, Rpt(p, rbars.max), Ibg, 0, ZP);
 	}
 	for (; ds > 0; ds--){
 		drawpcm(p, pos);
-		p.y += DHEIGHT + 4;
+		p.y += DHeight + 4;
 		pos += dwidth;
 	}
 	drawcurabs();
