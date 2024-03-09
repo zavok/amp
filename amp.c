@@ -6,30 +6,34 @@
 #include <cursor.h>
 #include <keyboard.h>
 
-#define DHeight 32
-#define Zoomout 512
+enum {
+	DHeight = 32,
+	Zoomout = 512,
+	Margin = 4,
+};
 
 s8int *pcm, *pp;
 u8int *mono8;
-long pcmlen, scroll, curpos;
-Image *Ibg, *Itrbg, *Itrfg, *Icur, *Irow;
+long pcmlen, scroll;
+Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
-int dwidth;
+int fid, dwidth, needflush;
+char *path;
 
 void usage(void);
 void clear(void);
 void setdwidth(void);
 void drawpcm(Point, ulong);
 void drawcur(Point);
-void drawcurabs(void);
-void clearcurabs(void);
 void redraw(ulong);
 void resize(void);
-void loadpcm(char*);
+void loadpcm(int);
 u8int* mkmono8(s8int*, long);
-Point getcurxy(void);
 int fillrow(ulong, ulong);
 void drawscroll(int);
+void scrollup(void);
+void scrolldown(void);
+void threadflush(void *);
 
 void
 threadmain(int argc, char **argv)
@@ -46,8 +50,9 @@ threadmain(int argc, char **argv)
 	}ARGEND;
 
 	if (argc == 0) usage();
-
-	loadpcm(argv[0]);
+	path = argv[0];
+	fid = open(path, OREAD);
+	loadpcm(fid);
 	mono8 = mkmono8(pcm, pcmlen);
 
 	if (argc <= 0) usage();
@@ -58,19 +63,22 @@ threadmain(int argc, char **argv)
 	if((kctl = initkeyboard(0)) == nil)
 		sysfatal("initkeyboard failed: %r");
 
+	display->locking = 1;
+	unlockdisplay(display);
+
+	proccreate(threadflush, nil, 1024);
+
+	lockdisplay(display);
 	Ibg = allocimage(display, Rect(0,0,1,1), RGB24, 1, 0xBBBBBBFF);
 	Itrbg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DWhite);
 	Itrfg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DBlack);
-	Icur = allocimage(display, Rect(0,0,1,1), RGB24, 1, DRed);
-
-	curpos = 0;
-
 	resize();
-	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
-		CMAP8, 0, DBlue);
+	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight), CMAP8, 0, DBlue);
 	clear();
 	redraw(0);
 	flushimage(display, 1);
+	unlockdisplay(display);
+
 	Alt alts[5] = {
 		{kctl->c, &kv, CHANRCV},
 		{mctl->c, &mv, CHANRCV},
@@ -83,34 +91,14 @@ threadmain(int argc, char **argv)
 			if (kv == 0x7f) threadexitsall(nil);
 			break;
 		case 1: /* mouse */
-			if (mv.buttons == 0) {
-			}
-			if (mv.buttons == 1) {
-				clearcurabs();
-				long mrow = (mv.xy.y - screen->r.min.y) / (DHeight + 4);
-				long mx = mv.xy.x - screen->r.min.x - 4;
-				if (mx < 0) mx = 0;
-				if (mx >= dwidth) mx = dwidth - 1;
-				long newpos = (scroll + mrow) * dwidth + mx;
-				curpos = newpos;
-				if (curpos >= pcmlen / (Zoomout * 4))
-					curpos = pcmlen / (Zoomout * 4) - 1;
-				pp = pcm + curpos * (Zoomout * 4);
-				drawcurabs();
-				flushimage(display, 1);
-			}
-			if (mv.buttons == 4) {
-			}
-			if (mv.buttons == 8) { /* scroll up */
-				drawscroll(-1);
-				flushimage(display, 1);
-			}
-			if (mv.buttons == 16) { /* scroll down */
-				drawscroll(1);
-				flushimage(display, 1);
-			}
+			//if (mv.buttons == 0);
+			//if (mv.buttons == 1);
+			//if (mv.buttons == 4);
+			if (mv.buttons == 8) scrollup();
+			if (mv.buttons == 16) scrolldown();
 			break;
 		case 2: /* resize */
+			lockdisplay(display);
 			if(getwindow(display, Refnone) < 0)
 				sysfatal("resize failed: %r");
 			resize();
@@ -120,23 +108,36 @@ threadmain(int argc, char **argv)
 			clear();
 			redraw(scroll * dwidth);
 			flushimage(display, 1);
+			unlockdisplay(display);
 			break;
 		}
 	}
 }
 
 void
+threadflush(void *)
+{
+	threadsetname("flush");
+	for (;;) {
+		if (needflush != 0) {
+			lockdisplay(display);
+			flushimage(display, 1);
+			unlockdisplay(display);
+			needflush = 0;
+		}
+		sleep(1000/60);
+	}
+}
+
+void
 resize(void)
 {
-	int height;
 	setdwidth();
 	rbars = screen->r;
-	rbars.min.x += 4;
-	rbars.max.x -= 4;
-	height = Dy(screen->r) / (DHeight + 4) * (DHeight + 4);
-	rbars.min.y += 2 + (Dy(screen->r) - height) / 2;
-	rbars.max.y = rbars.min.y + height;
-
+	rbars.min.x += Margin;
+	rbars.max.x -= Margin;
+	rbars.min.y += Margin;
+	rbars.max.y -= Margin;
 	if (scroll > pcmlen/(4 * Zoomout*dwidth))
 		scroll = pcmlen/(4 * Zoomout*dwidth);
 }
@@ -157,7 +158,7 @@ clear(void)
 void
 setdwidth(void)
 {
-	dwidth = Dx(screen->r) - 8;
+	dwidth = Dx(screen->r) - 2 * Margin;
 }
 
 void
@@ -171,69 +172,34 @@ drawpcm(Point p, ulong start)
 	return;
 }
 
-Point
-getcurxy()
-{
-	Point p;
-	p = rbars.min;
-	p.x += curpos%dwidth;
-	p.y += (curpos/dwidth - scroll)*(DHeight + 4);
-	return p;
-}
-
-void
-drawcur(Point p)
-{
-	draw(screen, Rpt(p, addpt(p, Pt(1, DHeight))), Icur, 0, ZP);
-}
-
-void
-drawcurabs(void)
-{
-	if (curpos < scroll *dwidth) return;
-	drawcur(getcurxy());
-}
-
-void
-clearcurabs(void)
-{
-	Point p;
-	if (curpos < scroll *dwidth) return;
-	p = getcurxy();
-	fillrow(curpos, 2);
-	draw(screen, Rpt(p, addpt(p, Pt(1, DHeight))), Irow, 0, ZP);
-}
-
 void
 redraw(ulong d)
 {
 	Point p;
 	p = rbars.min;
-	while (p.y < screen->r.max.y - (DHeight)) {
+	while (p.y < screen->r.max.y) {
 		if (d > pcmlen/(4 * Zoomout)) break;
 		drawpcm(p, d);
 		d += dwidth;
-		p.y += DHeight + 4;
+		p.y += DHeight + Margin;
 	}
-	drawcurabs();
 }
 
 void
-loadpcm(char *path)
+loadpcm(int fd)
 {
 	long n;
-	int fd;
 	s8int *buf;
+	fprint(2, "loading pcm...");
 	buf = malloc(32 * 1024);
-	fd = open(path, OREAD);
 	pcmlen = 0;
-	while((n = read(fd, buf, 1024)) > 0){
+	while((n = read(fd, buf, 32 * 1024)) > 0){
 		pcm = realloc(pcm, pcmlen + n);
 		memcpy(pcm + pcmlen, buf, n);
 		pcmlen += n;
 	}
-	close(fd);
 	pp = pcm;
+	fprint(2, "done\n");
 }
 
 int
@@ -302,20 +268,40 @@ drawscroll(int ds)
 	}
 	if (ds == 0) return;
 	p = addpt(rbars.min, Pt(0, ds * (DHeight+4)));
+	lockdisplay(display);
 	draw(screen, rbars, screen, 0, p);
+	unlockdisplay(display);
+	needflush = 1;
 	if (ds < 0) {
 		p = rbars.min;
 		pos = dwidth * scroll;
 		ds = - ds;
 	} else {
-		p = Pt(rbars.min.x, rbars.max.y - ds * (DHeight + 4));
-		pos = dwidth * (scroll - ds + Dy(rbars) / (DHeight + 4));
+		p = Pt(rbars.min.x, rbars.max.y - ds * (DHeight + Margin));
+		pos = dwidth * (scroll - ds + Dy(rbars) / (DHeight + Margin));
+		lockdisplay(display);
 		draw(screen, Rpt(p, rbars.max), Ibg, 0, ZP);
+		unlockdisplay(display);
+		needflush = 1;
 	}
 	for (; ds > 0; ds--){
+		lockdisplay(display);
 		drawpcm(p, pos);
-		p.y += DHeight + 4;
+		unlockdisplay(display);
+		needflush = 1;
+		p.y += DHeight + Margin;
 		pos += dwidth;
 	}
-	drawcurabs();
+}
+
+void
+scrollup(void)
+{
+	drawscroll(-1);
+}
+
+void
+scrolldown(void)
+{
+	drawscroll(1);
 }
