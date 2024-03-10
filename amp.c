@@ -8,9 +8,19 @@
 
 enum {
 	DHeight = 32,
+	DCacheSize = 32,
 	Zoomout = 512,
 	Margin = 4,
 };
+
+typedef struct DCache DCache;
+struct DCache {
+	int c;
+	ulong start;
+	Image *img;
+};
+
+DCache dcache[DCacheSize];
 
 s8int *pcm, *pp;
 u8int *mono8;
@@ -22,7 +32,6 @@ char *path;
 
 void usage(void);
 void clear(void);
-void setdwidth(void);
 void drawpcm(Point, ulong);
 void drawcur(Point);
 void redraw(ulong);
@@ -75,10 +84,9 @@ threadmain(int argc, char **argv)
 	resize();
 	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight), CMAP8, 0, DBlue);
 	clear();
-	redraw(0);
-	flushimage(display, 1);
 	unlockdisplay(display);
-
+	redraw(0);
+	needflush = 1;
 	Alt alts[5] = {
 		{kctl->c, &kv, CHANRCV},
 		{mctl->c, &mv, CHANRCV},
@@ -106,9 +114,9 @@ threadmain(int argc, char **argv)
 			Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
 				CMAP8, 0, DBlue);
 			clear();
-			redraw(scroll * dwidth);
-			flushimage(display, 1);
 			unlockdisplay(display);
+			redraw(scroll * dwidth);
+			needflush = 1;
 			break;
 		}
 	}
@@ -132,7 +140,7 @@ threadflush(void *)
 void
 resize(void)
 {
-	setdwidth();
+	dwidth = Dx(screen->r) - Margin * 2;
 	rbars = screen->r;
 	rbars.min.x += Margin;
 	rbars.max.x -= Margin;
@@ -152,13 +160,7 @@ usage(void)
 void
 clear(void)
 {
-	draw(screen, screen->r, Ibg, 0, ZP);
-}
-
-void
-setdwidth(void)
-{
-	dwidth = Dx(screen->r) - 2 * Margin;
+	draw(screen, screen->r, Ibg, nil, ZP);
 }
 
 void
@@ -168,7 +170,10 @@ drawpcm(Point p, ulong start)
 	r.min = p;
 	r.max.x = r.min.x + fillrow(start, dwidth);
 	r.max.y = r.min.y + DHeight;
+	lockdisplay(display);
 	draw(screen, r, Irow, 0, ZP);
+	unlockdisplay(display);
+	needflush = 1;
 	return;
 }
 
@@ -235,7 +240,9 @@ fillrow(ulong start, ulong width)
 	Rectangle r;
 	r = Irow->r;
 	r.max.x = r.min.x + width;
+	lockdisplay(display);
 	loadimage(Irow, r, buf, bsize);
+	unlockdisplay(display);
 	free(buf);
 	return bp - buf;
 }
@@ -255,8 +262,6 @@ mkmono8(s8int *pcm, long pcmlen)
 void
 drawscroll(int ds)
 {
-	Point p;
-	long pos;
 	scroll += ds;
 	if (scroll < 0) {
 		ds -= scroll;
@@ -267,31 +272,11 @@ drawscroll(int ds)
 		scroll = pcmlen / (4 * Zoomout * dwidth);
 	}
 	if (ds == 0) return;
-	p = addpt(rbars.min, Pt(0, ds * (DHeight+4)));
 	lockdisplay(display);
-	draw(screen, rbars, screen, 0, p);
+	clear();
 	unlockdisplay(display);
 	needflush = 1;
-	if (ds < 0) {
-		p = rbars.min;
-		pos = dwidth * scroll;
-		ds = - ds;
-	} else {
-		p = Pt(rbars.min.x, rbars.max.y - ds * (DHeight + Margin));
-		pos = dwidth * (scroll - ds + Dy(rbars) / (DHeight + Margin));
-		lockdisplay(display);
-		draw(screen, Rpt(p, rbars.max), Ibg, 0, ZP);
-		unlockdisplay(display);
-		needflush = 1;
-	}
-	for (; ds > 0; ds--){
-		lockdisplay(display);
-		drawpcm(p, pos);
-		unlockdisplay(display);
-		needflush = 1;
-		p.y += DHeight + Margin;
-		pos += dwidth;
-	}
+	redraw(scroll * dwidth);
 }
 
 void
