@@ -39,9 +39,8 @@ void resize(void);
 void loadpcm(int);
 u8int* mkmono8(s8int*, long);
 int fillrow(ulong, ulong);
+int row(int);
 void drawscroll(int);
-void scrollup(void);
-void scrolldown(void);
 void threadflush(void *);
 
 void
@@ -102,8 +101,8 @@ threadmain(int argc, char **argv)
 			//if (mv.buttons == 0);
 			//if (mv.buttons == 1);
 			//if (mv.buttons == 4);
-			if (mv.buttons == 8) scrollup();
-			if (mv.buttons == 16) scrolldown();
+			if (mv.buttons == 8) drawscroll(-row(mv.xy.y));
+			if (mv.buttons == 16) drawscroll(row(mv.xy.y));
 			break;
 		case 2: /* resize */
 			lockdisplay(display);
@@ -195,7 +194,6 @@ loadpcm(int fd)
 {
 	long n;
 	s8int *buf;
-	fprint(2, "loading pcm...");
 	buf = malloc(32 * 1024);
 	pcmlen = 0;
 	while((n = read(fd, buf, 32 * 1024)) > 0){
@@ -204,7 +202,7 @@ loadpcm(int fd)
 		pcmlen += n;
 	}
 	pp = pcm;
-	fprint(2, "done\n");
+	free(buf);
 }
 
 int
@@ -247,6 +245,12 @@ fillrow(ulong start, ulong width)
 	return bp - buf;
 }
 
+int
+row(int y)
+{
+	return 1 + (y - rbars.min.y) / (DHeight + Margin);
+}
+
 u8int*
 mkmono8(s8int *pcm, long pcmlen)
 {
@@ -277,16 +281,4 @@ drawscroll(int ds)
 	unlockdisplay(display);
 	needflush = 1;
 	redraw(scroll * dwidth);
-}
-
-void
-scrollup(void)
-{
-	drawscroll(-1);
-}
-
-void
-scrolldown(void)
-{
-	drawscroll(1);
 }
