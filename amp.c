@@ -27,7 +27,7 @@ u8int *mono8;
 long pcmlen, scroll;
 Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
-int fid, dwidth, needflush;
+int fid, dwidth, needflush, maxlines;
 char *path;
 
 void usage(void);
@@ -96,6 +96,10 @@ threadmain(int argc, char **argv)
 		switch (alt(alts)) {
 		case 0: /* keyboard */
 			if (kv == 0x7f) threadexitsall(nil);
+			if (kv == Kdown) drawscroll(maxlines/3);
+			if (kv == Kup) drawscroll(-maxlines/3);
+			if (kv == Kpgdown) drawscroll(maxlines);
+			if (kv == Kpgup) drawscroll(-maxlines);
 			break;
 		case 1: /* mouse */
 			//if (mv.buttons == 0);
@@ -147,6 +151,7 @@ resize(void)
 	rbars.max.y -= Margin;
 	if (scroll > pcmlen/(4 * Zoomout*dwidth))
 		scroll = pcmlen/(4 * Zoomout*dwidth);
+	maxlines = Dy(rbars) / (DHeight + Margin);
 }
 
 void
@@ -162,15 +167,27 @@ clear(void)
 	draw(screen, screen->r, Ibg, nil, ZP);
 }
 
+Image *
+getmask(ulong start, ulong width)
+{
+	Rectangle r;
+	r = Irow->r;
+	r.max.x = r.min.x + fillrow(start, width);
+	replclipr(Irow, 0, r);
+	return Irow;
+}
+
 void
 drawpcm(Point p, ulong start)
 {
+	Image *mask;
 	Rectangle r;
+	mask = getmask(start, dwidth);
 	r.min = p;
-	r.max.x = r.min.x + fillrow(start, dwidth);
+	r.max.x = r.min.x + Dx(mask->clipr);
 	r.max.y = r.min.y + DHeight;
 	lockdisplay(display);
-	draw(screen, r, Irow, 0, ZP);
+	draw(screen, r, mask, 0, ZP);
 	unlockdisplay(display);
 	needflush = 1;
 	return;
