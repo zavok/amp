@@ -22,9 +22,9 @@ struct DCache {
 
 DCache dcache[DCacheSize];
 
-s8int *pcm, *pp;
+s8int *pcm;
 u8int *mono8;
-long pcmlen, scroll;
+long pcmlen, scroll, smin, smax;
 Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
 int fid, dwidth, needflush, maxlines;
@@ -33,7 +33,6 @@ char *path;
 void usage(void);
 void clear(void);
 void drawpcm(Point, ulong);
-void drawcur(Point);
 void redraw(ulong);
 void resize(void);
 void loadpcm(int);
@@ -182,14 +181,38 @@ drawpcm(Point p, ulong start)
 {
 	Image *mask;
 	Rectangle r;
+	long w;
 	mask = getmask(start, dwidth);
 	r.min = p;
-	r.max.x = r.min.x + Dx(mask->clipr);
-	r.max.y = r.min.y + DHeight;
+	r.max.x = p.x + Dx(mask->clipr);
+	r.max.y = p.y + DHeight;
+
 	lockdisplay(display);
-	draw(screen, r, mask, 0, ZP);
+	if (start < smin) {
+		w = smin - start;
+		if (w > Dx(r)) w = Dx(r);
+		r.max.x = r.min.x + w;
+		draw(screen, r, mask, 0, ZP);
+		start += w;
+		r.min.x += w;
+		r.max.x = p.x + Dx(mask->clipr);
+	}
+	if (start < smax) {
+		w = smax - start;
+		if (w > Dx(r)) w = Dx(r);
+		r.max.x = r.min.x + w;
+		draw(screen, r, Itrbg, 0, ZP);
+		draw(screen, r, Itrfg, mask, ZP);
+		start += w;
+		r.min.x += w;
+		r.max.x = p.x + Dx(mask->clipr);
+	}
+	if ((start >= smax)) {
+		draw(screen, r, mask, 0, ZP);
+	}
 	unlockdisplay(display);
 	needflush = 1;
+
 	return;
 }
 
@@ -218,7 +241,6 @@ loadpcm(int fd)
 		memcpy(pcm + pcmlen, buf, n);
 		pcmlen += n;
 	}
-	pp = pcm;
 	free(buf);
 }
 
