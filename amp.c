@@ -11,6 +11,10 @@ enum {
 	DCacheSize = 32,
 	Zoomout = 512,
 	Margin = 4,
+
+	MIdle = 0,
+	MSelectStart = 1,
+	MSelect = 2,
 };
 
 typedef struct DCache DCache;
@@ -27,7 +31,7 @@ u8int *mono8;
 long pcmlen, scroll, smin, smax;
 Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
-int fid, dwidth, needflush, maxlines;
+int fid, dwidth, needflush, maxlines, mmode;
 char *path;
 
 void usage(void);
@@ -41,6 +45,7 @@ int fillrow(ulong, ulong);
 int row(int);
 void drawscroll(int);
 void threadflush(void *);
+void threadselect(void *);
 
 void
 threadmain(int argc, char **argv)
@@ -74,6 +79,7 @@ threadmain(int argc, char **argv)
 	unlockdisplay(display);
 
 	proccreate(threadflush, nil, 1024);
+	threadcreate(threadselect, &mv, 1024);
 
 	lockdisplay(display);
 	Ibg = allocimage(display, Rect(0,0,1,1), RGB24, 1, 0xBBBBBBFF);
@@ -101,11 +107,11 @@ threadmain(int argc, char **argv)
 			if (kv == Kpgup) drawscroll(-maxlines);
 			break;
 		case 1: /* mouse */
-			//if (mv.buttons == 0);
-			//if (mv.buttons == 1);
+			if (mv.buttons == 0) mmode = MIdle;
+			if ((mv.buttons & 1) && (mmode == MIdle)) mmode = MSelectStart;
 			//if (mv.buttons == 4);
-			if (mv.buttons == 8) drawscroll(-row(mv.xy.y));
-			if (mv.buttons == 16) drawscroll(row(mv.xy.y));
+			if (mv.buttons == 8) drawscroll(-1-row(mv.xy.y));
+			if (mv.buttons == 16) drawscroll(1+row(mv.xy.y));
 			break;
 		case 2: /* resize */
 			lockdisplay(display);
@@ -136,6 +142,32 @@ threadflush(void *)
 			needflush = 0;
 		}
 		sleep(1000/60);
+	}
+}
+
+void
+threadselect(void *v)
+{
+	int p;
+	static ulong ss, se;
+	Mouse *mv;
+	threadsetname("select");
+	mv = v;
+	for (;;) {
+		p = (scroll + row(mv->xy.y)) * dwidth + mv->xy.x - rbars.min.x;
+		if (p < 0) p = 0;
+		if (p > sizeof(s8int) * pcmlen / 4) p = sizeof(s8int) * pcmlen / 4;
+		switch (mmode) {
+		case MSelectStart:
+			mmode = MSelect;
+			ss = p;
+		case MSelect:
+			se = p;
+			if (ss < se) smin = ss, smax = se;
+			else smin = se, smax = ss;
+			redraw(scroll * dwidth);
+		}
+		yield();
 	}
 }
 
@@ -202,13 +234,13 @@ drawpcm(Point p, ulong start)
 		if (w > Dx(r)) w = Dx(r);
 		r.max.x = r.min.x + w;
 		draw(screen, r, Itrbg, 0, ZP);
-		draw(screen, r, Itrfg, mask, ZP);
+		draw(screen, r, Itrfg, mask, Pt(r.min.x - p.x, 0));
 		start += w;
 		r.min.x += w;
 		r.max.x = p.x + Dx(mask->clipr);
 	}
 	if ((start >= smax)) {
-		draw(screen, r, mask, 0, ZP);
+		draw(screen, r, mask, 0, Pt(r.min.x - p.x, 0));
 	}
 	unlockdisplay(display);
 	needflush = 1;
@@ -287,7 +319,7 @@ fillrow(ulong start, ulong width)
 int
 row(int y)
 {
-	return 1 + (y - rbars.min.y) / (DHeight + Margin);
+	return (y - rbars.min.y) / (DHeight + Margin);
 }
 
 u8int*
