@@ -7,6 +7,7 @@
 #include <keyboard.h>
 
 enum {
+	FrameSize = sizeof(s16int) * 2,
 	DHeight = 32,
 	DCacheSize = 32,
 	Zoomout = 512,
@@ -18,21 +19,12 @@ enum {
 };
 
 typedef struct DCache DCache;
+
 struct DCache {
 	int c;
 	ulong start;
 	Image *img;
 };
-
-DCache dcache[DCacheSize];
-
-s8int *pcm;
-u8int *mono8;
-long pcmlen, scroll, smin, smax;
-Image *Ibg, *Itrbg, *Itrfg, *Irow;
-Rectangle rbars;
-int fid, dwidth, needflush, maxlines, mmode;
-char *path;
 
 void usage(void);
 void clear(void);
@@ -40,12 +32,29 @@ void drawpcm(Point, ulong);
 void redraw(ulong);
 void resize(void);
 void loadpcm(int);
-u8int* mkmono8(s8int*, long);
+long mkmono8(u8int **, s8int*, long);
 int fillrow(ulong, ulong);
 int row(int);
 void drawscroll(int);
 void threadflush(void *);
 void threadselect(void *);
+void msnarf(void);
+void mplumb(void);
+void mredraw(void);
+void mwrite(void);
+void mexit(void);
+
+DCache dcache[DCacheSize];
+s8int *pcm;
+u8int *mono8;
+long pcmlen, monolen, scroll, smin, smax;
+Image *Ibg, *Itrbg, *Itrfg, *Irow;
+Rectangle rbars;
+int fid, dwidth, needflush, maxlines, mmode;
+char *path;
+char *menustr[] = {"snarf", "plumb", "redraw", "write", "exit", nil};
+void (*menufunc[])(void) = {msnarf, mplumb, mredraw, mwrite, mexit};
+Menu menu = {menustr, nil, 0};
 
 void
 threadmain(int argc, char **argv)
@@ -65,7 +74,7 @@ threadmain(int argc, char **argv)
 	path = argv[0];
 	fid = open(path, OREAD);
 	loadpcm(fid);
-	mono8 = mkmono8(pcm, pcmlen);
+	monolen = mkmono8(&mono8, pcm, pcmlen);
 
 	if (argc <= 0) usage();
 	if(initdraw(0, 0, "amp") < 0)
@@ -108,8 +117,11 @@ threadmain(int argc, char **argv)
 			break;
 		case 1: /* mouse */
 			if (mv.buttons == 0) mmode = MIdle;
-			if ((mv.buttons & 1) && (mmode == MIdle)) mmode = MSelectStart;
-			//if (mv.buttons == 4);
+			if ((mv.buttons == 1) && (mmode == MIdle)) mmode = MSelectStart;
+			if (mv.buttons == 4) {
+				int n = menuhit(3, mctl, &menu, nil);
+				if (n >= 0) menufunc[n]();
+			}
 			if (mv.buttons == 8) drawscroll(-1-row(mv.xy.y));
 			if (mv.buttons == 16) drawscroll(1+row(mv.xy.y));
 			break;
@@ -156,7 +168,9 @@ threadselect(void *v)
 	for (;;) {
 		p = (scroll + row(mv->xy.y)) * dwidth + mv->xy.x - rbars.min.x;
 		if (p < 0) p = 0;
-		if (p > sizeof(s8int) * pcmlen / 4) p = sizeof(s8int) * pcmlen / 4;
+		if (p > monolen / Zoomout) {
+			p = monolen / Zoomout;
+		}
 		switch (mmode) {
 		case MSelectStart:
 			mmode = MSelect;
@@ -180,8 +194,8 @@ resize(void)
 	rbars.max.x -= Margin;
 	rbars.min.y += Margin;
 	rbars.max.y -= Margin;
-	if (scroll > pcmlen/(4 * Zoomout*dwidth))
-		scroll = pcmlen/(4 * Zoomout*dwidth);
+	if (scroll > pcmlen/(FrameSize * Zoomout * dwidth))
+		scroll = pcmlen/(FrameSize * Zoomout * dwidth);
 	maxlines = Dy(rbars) / (DHeight + Margin);
 }
 
@@ -254,7 +268,7 @@ redraw(ulong d)
 	Point p;
 	p = rbars.min;
 	while (p.y < screen->r.max.y) {
-		if (d > pcmlen/(4 * Zoomout)) break;
+		if (d > pcmlen/(FrameSize * Zoomout)) break;
 		drawpcm(p, d);
 		d += dwidth;
 		p.y += DHeight + Margin;
@@ -285,7 +299,7 @@ fillrow(ulong start, ulong width)
 	ulong n, i, j;
 	u8int *buf, *bp;
 	end = (start + width) * Zoomout;
-	if (end > pcmlen / 4) end = pcmlen / 4;
+	if (end > pcmlen / FrameSize) end = pcmlen / FrameSize;
 	bsize = width * Dy(Irow->r);
 	buf = malloc(bsize);
 	bp = buf;
@@ -322,16 +336,16 @@ row(int y)
 	return (y - rbars.min.y) / (DHeight + Margin);
 }
 
-u8int*
-mkmono8(s8int *pcm, long pcmlen)
+long
+mkmono8(u8int **mono8, s8int *pcm, long pcmlen)
 {
 	long i, j;
-	u8int *mono8;
-	mono8 = malloc(sizeof(s8int) * pcmlen / 4);
-	for (i = 0, j = 0; i < pcmlen; i+=4, j++) {
-		mono8[j] = (pcm[i+1] + pcm[i+3] + 256) / 2;
+	monolen = pcmlen / FrameSize;
+	*mono8 = malloc(monolen);
+	for (i = 0, j = 0; i < pcmlen; i += FrameSize, j++) {
+		(*mono8)[j] = (pcm[i+1] + pcm[i+3] + 256) / 2;
 	}
-	return mono8;
+	return monolen;
 }
 
 void
@@ -342,9 +356,9 @@ drawscroll(int ds)
 		ds -= scroll;
 		scroll = 0;
 	}
-	if (scroll > pcmlen / (4 * Zoomout * dwidth)) {
-		ds -=  scroll - pcmlen / (4 * Zoomout * dwidth);
-		scroll = pcmlen / (4 * Zoomout * dwidth);
+	if (scroll > monolen / (Zoomout * dwidth)) {
+		ds -=  scroll - monolen / (Zoomout * dwidth);
+		scroll = monolen / (Zoomout * dwidth);
 	}
 	if (ds == 0) return;
 	lockdisplay(display);
@@ -353,3 +367,42 @@ drawscroll(int ds)
 	needflush = 1;
 	redraw(scroll * dwidth);
 }
+
+void
+msnarf(void)
+{
+	int fd, n, min, max;
+	char buf[25];
+	min = smin * Zoomout * FrameSize;
+	max = smax * Zoomout * FrameSize;
+	n = snprint(buf, 25, "%11d %11d ", min, max);
+	if ((fd = open("/dev/snarf", OWRITE)) < 0) {
+		fprint(2, "%r\n");
+		return;
+	}
+	write(fd, buf, n);
+	close(fd);
+}
+
+void
+mplumb(void)
+{
+}
+
+void
+mredraw(void)
+{
+}
+
+void
+mwrite(void)
+{
+}
+
+void
+mexit(void)
+{
+	threadexitsall(nil);
+}
+
+
