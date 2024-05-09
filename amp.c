@@ -51,7 +51,9 @@ long pcmlen, monolen, scroll, smin, smax;
 Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
 int fid, dwidth, needflush, maxlines, mmode;
-char *path;
+char *path, wpath[256];
+Mousectl *mctl;
+Keyboardctl *kctl;
 char *menustr[] = {"snarf", "plumb", "redraw", "write", "exit", nil};
 void (*menufunc[])(void) = {msnarf, mplumb, mredraw, mwrite, mexit};
 Menu menu = {menustr, nil, 0};
@@ -59,8 +61,6 @@ Menu menu = {menustr, nil, 0};
 void
 threadmain(int argc, char **argv)
 {
-	Mousectl *mctl;
-	Keyboardctl *kctl;
 	Mouse mv;
 	Rune  kv;
 	int   rv[2];
@@ -180,6 +180,7 @@ threadselect(void *v)
 			if (ss < se) smin = ss, smax = se;
 			else smin = se, smax = ss;
 			redraw(scroll * dwidth);
+			needflush = 1;
 		}
 		yield();
 	}
@@ -365,7 +366,9 @@ drawscroll(int ds)
 	clear();
 	unlockdisplay(display);
 	needflush = 1;
+	yield();
 	redraw(scroll * dwidth);
+	needflush = 1;
 }
 
 void
@@ -392,11 +395,25 @@ mplumb(void)
 void
 mredraw(void)
 {
+	redraw(scroll * dwidth);
+	needflush = 1;
 }
 
 void
 mwrite(void)
 {
+	int n, fd;
+	long min, max;
+	n = enter("write to:", wpath, 256, mctl, kctl, nil);
+	if (n <= 0) return;
+	if ((fd = create(wpath, OWRITE, 0666)) < 0) {
+		fprint(2, "%r\n");
+		return;
+	}
+	min = smin * Zoomout * FrameSize;
+	max = smax * Zoomout * FrameSize;
+	write(fd, pcm + min, max - min);
+	close(fd);
 }
 
 void
