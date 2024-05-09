@@ -5,6 +5,7 @@
 #include <mouse.h>
 #include <cursor.h>
 #include <keyboard.h>
+#include <plumb.h>
 
 enum {
 	FrameSize = sizeof(s16int) * 2,
@@ -57,6 +58,10 @@ Keyboardctl *kctl;
 char *menustr[] = {"snarf", "plumb", "redraw", "write", "exit", nil};
 void (*menufunc[])(void) = {msnarf, mplumb, mredraw, mwrite, mexit};
 Menu menu = {menustr, nil, 0};
+struct {
+	int send, recv;
+	char *port;
+} plumb = {.port = "amp"};
 
 void
 threadmain(int argc, char **argv)
@@ -76,7 +81,11 @@ threadmain(int argc, char **argv)
 	loadpcm(fid);
 	monolen = mkmono8(&mono8, pcm, pcmlen);
 
-	if (argc <= 0) usage();
+	plumb.send = plumbopen("send", OWRITE);
+	if (plumb.send < 0) fprint(2, "%r\n");
+	plumb.recv = plumbopen(plumb.port, OREAD);
+	if (plumb.recv <0) fprint(2, "%r\n");
+
 	if(initdraw(0, 0, "amp") < 0)
 		sysfatal("inidraw failed: %r");
 	if((mctl = initmouse(0, screen)) == nil)
@@ -390,6 +399,18 @@ msnarf(void)
 void
 mplumb(void)
 {
+	int min, max;
+	min = smin * Zoomout * FrameSize;
+	max = smax * Zoomout * FrameSize;
+	Plumbmsg *m;
+	m = mallocz(sizeof(Plumbmsg), 1);
+	m->src = smprint("amp");
+	m->dst = strdup(plumb.port);
+	m->type = strdup("text");
+	m->data = smprint("%11d %11d ", min, max);
+	m->ndata = strlen(m->data);
+	plumbsend(plumb.send, m);
+	plumbfree(m);
 }
 
 void
