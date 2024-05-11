@@ -39,11 +39,13 @@ int row(int);
 void drawscroll(int);
 void threadflush(void *);
 void threadselect(void *);
+void threadplumb(void *);
 void msnarf(void);
 void mplumb(void);
 void mredraw(void);
 void mwrite(void);
 void mexit(void);
+void setselect(long, long);
 
 DCache dcache[DCacheSize];
 s8int *pcm;
@@ -98,6 +100,7 @@ threadmain(int argc, char **argv)
 
 	proccreate(threadflush, nil, 1024);
 	threadcreate(threadselect, &mv, 1024);
+	proccreate(threadplumb, nil, 1024);
 
 	lockdisplay(display);
 	Ibg = allocimage(display, Rect(0,0,1,1), RGB24, 1, 0xBBBBBBFF);
@@ -108,7 +111,6 @@ threadmain(int argc, char **argv)
 	clear();
 	unlockdisplay(display);
 	redraw(0);
-	needflush = 1;
 	Alt alts[5] = {
 		{kctl->c, &kv, CHANRCV},
 		{mctl->c, &mv, CHANRCV},
@@ -145,7 +147,6 @@ threadmain(int argc, char **argv)
 			clear();
 			unlockdisplay(display);
 			redraw(scroll * dwidth);
-			needflush = 1;
 			break;
 		}
 	}
@@ -186,12 +187,27 @@ threadselect(void *v)
 			ss = p;
 		case MSelect:
 			se = p;
-			if (ss < se) smin = ss, smax = se;
-			else smin = se, smax = ss;
-			redraw(scroll * dwidth);
-			needflush = 1;
+			setselect(ss, se);
 		}
 		yield();
+	}
+}
+
+void
+threadplumb(void *)
+{
+	Plumbmsg *m;
+	long s, e;
+	threadsetname("plumb");
+	for (;;) {
+		m = plumbrecv(plumb.recv);
+		if (m->ndata < 24) fprint(2, "plumb message too short\n");
+		else if (strcmp(m->src, "amp") != 0){
+			s = strtol(m->data, nil, 10);
+			e = strtol(m->data + 12, nil, 10);
+			setselect(s / (Zoomout * FrameSize), e / (Zoomout * FrameSize));
+		}
+		plumbfree(m);
 	}
 }
 
@@ -417,7 +433,6 @@ void
 mredraw(void)
 {
 	redraw(scroll * dwidth);
-	needflush = 1;
 }
 
 void
@@ -443,4 +458,11 @@ mexit(void)
 	threadexitsall(nil);
 }
 
+void
+setselect(long s, long e)
+{
+	if (s < e) smin = s, smax = e;
+	else smax = s, smin = e;
+	redraw(scroll * dwidth);
+}
 
