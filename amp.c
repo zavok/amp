@@ -48,13 +48,11 @@ void mexit(void);
 void setselect(long, long);
 
 DCache dcache[DCacheSize];
-s8int *pcm;
-u8int *mono8;
 long pcmlen, monolen, scroll, smin, smax;
 Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
-int fid, dwidth, needflush, maxlines, mmode;
-char *path, wpath[256];
+int dwidth, needflush, maxlines, mmode;
+char wpath[256];
 Mousectl *mctl;
 Keyboardctl *kctl;
 char *menustr[] = {"snarf", "plumb", "redraw", "write", "exit", nil};
@@ -64,6 +62,11 @@ struct {
 	int send, recv;
 	char *port;
 } plumb = {.port = "amp"};
+struct {
+	s8int *p;
+	int fid, len, mtime;
+	char *path;
+} pcm;
 
 void
 threadmain(int argc, char **argv)
@@ -78,10 +81,10 @@ threadmain(int argc, char **argv)
 	}ARGEND;
 
 	if (argc == 0) usage();
-	path = argv[0];
-	fid = open(path, OREAD);
-	loadpcm(fid);
-	monolen = mkmono8(&mono8, pcm, pcmlen);
+	pcm.path = argv[0];
+	pcm.fid = open(pcm.path, OREAD);
+	loadpcm(pcm.fid);
+	monolen = pcm.len / FrameSize;
 
 	plumb.send = plumbopen("send", OWRITE);
 	if (plumb.send < 0) fprint(2, "%r\n");
@@ -220,8 +223,8 @@ resize(void)
 	rbars.max.x -= Margin;
 	rbars.min.y += Margin;
 	rbars.max.y -= Margin;
-	if (scroll > pcmlen/(FrameSize * Zoomout * dwidth))
-		scroll = pcmlen/(FrameSize * Zoomout * dwidth);
+	if (scroll > pcm.len/(FrameSize * Zoomout * dwidth))
+		scroll = pcm.len/(FrameSize * Zoomout * dwidth);
 	maxlines = Dy(rbars) / (DHeight + Margin);
 }
 
@@ -294,7 +297,7 @@ redraw(ulong d)
 	Point p;
 	p = rbars.min;
 	while (p.y < screen->r.max.y) {
-		if (d > pcmlen/(FrameSize * Zoomout)) break;
+		if (d > pcm.len/(FrameSize * Zoomout)) break;
 		drawpcm(p, d);
 		d += dwidth;
 		p.y += DHeight + Margin;
@@ -307,11 +310,11 @@ loadpcm(int fd)
 	long n;
 	s8int *buf;
 	buf = malloc(32 * 1024);
-	pcmlen = 0;
+	pcm.len = 0;
 	while((n = read(fd, buf, 32 * 1024)) > 0){
-		pcm = realloc(pcm, pcmlen + n);
-		memcpy(pcm + pcmlen, buf, n);
-		pcmlen += n;
+		pcm.p = realloc(pcm.p, pcm.len + n);
+		memcpy(pcm.p + pcm.len, buf, n);
+		pcm.len += n;
 	}
 	free(buf);
 }
@@ -321,19 +324,25 @@ fillrow(ulong start, ulong width)
 {
 	u8int min, max;
 	uint dmin, dmax;
-	long end, bsize;
-	ulong n, i, j;
+	long bsize;
+	ulong n, i, j, rlen, ulen;
 	u8int *buf, *bp;
-	end = (start + width) * Zoomout;
-	if (end > pcmlen / FrameSize) end = pcmlen / FrameSize;
+	s8int *rbuf;
+	u8int *ubuf;
 	bsize = width * Dy(Irow->r);
+	rbuf = malloc(width * FrameSize * Zoomout);
+	rlen = pread(pcm.fid, rbuf, width * FrameSize * Zoomout,
+	  start * FrameSize * Zoomout);
+	ulen = mkmono8(&ubuf, rbuf, rlen);
 	buf = malloc(bsize);
 	bp = buf;
 	min = 0x7f;
 	max = -0x7f;
-	for (i=0, n=start*Zoomout; (n<end)&&(bp<buf+width); n++, i++) {
-		if (min > mono8[n]) min = mono8[n];
-		if (max < mono8[n]) max = mono8[n];
+	for (i = 0, n = 0; (n < ulen) && (bp < buf + width); n++, i++) {
+		int mono;
+		mono = ubuf[n];
+		if (min > mono) min = mono;
+		if (max < mono) max = mono;
 		if (i >= Zoomout) {
 			i = 0;
 			dmin = min * DHeight / 256;
@@ -353,6 +362,8 @@ fillrow(ulong start, ulong width)
 	loadimage(Irow, r, buf, bsize);
 	unlockdisplay(display);
 	free(buf);
+	free(rbuf);
+	free(ubuf);
 	return bp - buf;
 }
 
@@ -366,6 +377,7 @@ long
 mkmono8(u8int **mono8, s8int *pcm, long pcmlen)
 {
 	long i, j;
+	long monolen;
 	monolen = pcmlen / FrameSize;
 	*mono8 = malloc(monolen);
 	for (i = 0, j = 0; i < pcmlen; i += FrameSize, j++) {
@@ -448,7 +460,7 @@ mwrite(void)
 	}
 	min = smin * Zoomout * FrameSize;
 	max = smax * Zoomout * FrameSize;
-	write(fd, pcm + min, max - min);
+	write(fd, pcm.p + min, max - min);
 	close(fd);
 }
 
