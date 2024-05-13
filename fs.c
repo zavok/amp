@@ -3,6 +3,7 @@
 #include <fcall.h>
 #include <thread.h>
 #include <9p.h>
+#include <plumb.h>
 
 #include "pages.h"
 
@@ -28,6 +29,8 @@ void fcut_write(Req *r);
 void normalize_sel(void);
 void update_selstr(void);
 
+void threadplumb(void *);
+
 Srv ampsrv = {
 	.read = fs_read,
 	.write = fs_write,
@@ -36,6 +39,11 @@ Srv ampsrv = {
 
 File *fdata, *fcut, *fctl;
 char *service, *mountpath = "/mnt/amp";
+
+struct {
+	int send, recv;
+	char *port;
+} plumb = {.port = "amp"};
 
 void
 usage(void)
@@ -60,12 +68,35 @@ threadmain(int argc, char **argv)
 	default: usage();
 	} ARGEND
 	if (argc != 0) usage();
+	proccreate(threadplumb, nil, 1024);
 	update_selstr();
 	ampsrv.tree = alloctree("amp", "amp", DMDIR|0555, nil);
 	fdata = createfile(ampsrv.tree->root, "data", "amp", 0666, nil);
 	fcut = createfile(ampsrv.tree->root, "cut", "amp", 0666, nil);
 	fctl = createfile(ampsrv.tree->root, "ctl", "amp", 0666, nil);
 	threadpostmountsrv(&ampsrv, service, mountpath, MREPL);
+}
+
+void
+threadplumb(void *)
+{
+	Plumbmsg *m;
+	long s, e;
+	if (plumb.recv < 0) return;
+	threadsetname("plumb");
+	for (;;) {
+		m = plumbrecv(plumb.recv);
+		if (m->ndata < 24) fprint(2, "plumb message too short\n");
+		else if (strcmp(m->src, "amp") != 0){
+			s = strtol(m->data, nil, 10);
+			e = strtol(m->data + 12, nil, 10);
+			sel.max = s, sel.min = e;
+			normalize_sel();
+			update_selstr();
+			fcut->length = (sel.max - sel.min) * FrameSize;
+		}
+		plumbfree(m);
+	}
 }
 
 void
