@@ -33,7 +33,6 @@ void drawpcm(Point, ulong);
 void redraw(ulong);
 void resize(void);
 void loadpcm(int);
-long mkmono8(u8int **, s8int*, long);
 int fillrow(ulong, ulong);
 int row(int);
 void drawscroll(int);
@@ -325,23 +324,21 @@ fillrow(ulong start, ulong width)
 {
 	u8int min, max;
 	uint dmin, dmax;
+	int mono;
 	long bsize;
-	ulong n, i, j, rlen, ulen;
+	ulong n, i, j, rlen;
 	u8int *buf, *bp;
 	s8int *rbuf;
-	u8int *ubuf;
 	bsize = width * Dy(Irow->r);
-	rbuf = malloc(width * FrameSize * Zoomout);
+	rbuf = mallocz(width * FrameSize * Zoomout, 1);
 	rlen = pread(pcm.fid, rbuf, width * FrameSize * Zoomout,
 	  start * FrameSize * Zoomout);
-	ulen = mkmono8(&ubuf, rbuf, rlen);
 	buf = malloc(bsize);
 	bp = buf;
 	min = 0x7f;
 	max = -0x7f;
-	for (i = 0, n = 0; (n < ulen) && (bp < buf + width); n++, i++) {
-		int mono;
-		mono = ubuf[n];
+	for (i = 0, n = 0; (n < rlen) && (bp < buf + width); n += FrameSize, i++) {
+		mono = (rbuf[n + 1] + rbuf[n + 3] + 256) / 2;
 		if (min > mono) min = mono;
 		if (max < mono) max = mono;
 		if (i >= Zoomout) {
@@ -364,7 +361,6 @@ fillrow(ulong start, ulong width)
 	unlockdisplay(display);
 	free(buf);
 	free(rbuf);
-	free(ubuf);
 	return bp - buf;
 }
 
@@ -372,19 +368,6 @@ int
 row(int y)
 {
 	return (y - rbars.min.y) / (DHeight + Margin);
-}
-
-long
-mkmono8(u8int **mono8, s8int *pcm, long pcmlen)
-{
-	long i, j;
-	long monolen;
-	monolen = pcmlen / FrameSize;
-	*mono8 = malloc(monolen);
-	for (i = 0, j = 0; i < pcmlen; i += FrameSize, j++) {
-		(*mono8)[j] = (pcm[i+1] + pcm[i+3] + 256) / 2;
-	}
-	return monolen;
 }
 
 void
