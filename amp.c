@@ -201,6 +201,7 @@ threadplumb(void *)
 {
 	Plumbmsg *m;
 	long s, e;
+	if (plumb.recv < 0) return;
 	threadsetname("plumb");
 	for (;;) {
 		m = plumbrecv(plumb.recv);
