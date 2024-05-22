@@ -14,10 +14,12 @@ enum {
 PBuf pg;
 
 struct {
-	int min;
-	int max;
+	vlong min;
+	vlong max;
 	char str[12*3+1]; // see update_selstr
 } sel;
+
+void plumbsel(void);
 
 void fs_open(Req *r);
 void fs_read(Req *r);
@@ -68,6 +70,12 @@ threadmain(int argc, char **argv)
 	default: usage();
 	} ARGEND
 	if (argc != 0) usage();
+
+	plumb.send = plumbopen("send", OWRITE);
+	if (plumb.send < 0) fprint(2, "%r\n");
+	plumb.recv = plumbopen(plumb.port, OREAD);
+	if (plumb.recv <0) fprint(2, "%r\n");
+
 	proccreate(threadplumb, nil, 1024);
 	update_selstr();
 	ampsrv.tree = alloctree("amp", "amp", DMDIR|0555, nil);
@@ -81,22 +89,36 @@ void
 threadplumb(void *)
 {
 	Plumbmsg *m;
-	long s, e;
+	vlong s, e;
 	if (plumb.recv < 0) return;
 	threadsetname("plumb");
 	for (;;) {
 		m = plumbrecv(plumb.recv);
 		if (m->ndata < 24) fprint(2, "plumb message too short\n");
-		else if (strcmp(m->src, "amp") != 0){
-			s = strtol(m->data, nil, 10);
-			e = strtol(m->data + 12, nil, 10);
+		else if (strcmp(m->src, "ampfs") != 0){
+			s = strtoll(m->data, nil, 10);
+			e = strtoll(m->data + 12, nil, 10);
 			sel.max = s, sel.min = e;
 			normalize_sel();
 			update_selstr();
-			fcut->length = (sel.max - sel.min) * FrameSize;
+			fcut->length = (sel.max - sel.min);
 		}
 		plumbfree(m);
 	}
+}
+
+void
+plumbsel(void)
+{
+	Plumbmsg *m;
+	m = mallocz(sizeof(Plumbmsg), 1);
+	m->src = smprint("ampfs");
+	m->dst = strdup(plumb.port);
+	m->type = strdup("text");
+	m->data = smprint("%11lld %11lld ", sel.min, sel.max);
+	m->ndata = strlen(m->data);
+	plumbsend(plumb.send, m);
+	plumbfree(m);
 }
 
 void
@@ -131,8 +153,8 @@ fs_read(Req *r)
 		  r->ifcall.count, r->ifcall.offset);
 		respond(r, nil);
 	} else if (r->fid->file == fcut) {
-		vlong min = sel.min * FrameSize;
-		vlong max = sel.max * FrameSize;
+		long min = sel.min;
+		long max = sel.max;
 		r->ifcall.offset += min;
 		if (r->ifcall.offset + r->ifcall.count > max)
 			r->ifcall.count = max - r->ifcall.offset;
@@ -162,7 +184,7 @@ fs_write(Req *r)
 		update_selstr();
 		respond(r, nil);
 	} else if (r->fid->file == fctl) {
-		int newmin, newmax;
+		vlong newmin, newmax;
 		char *np, *rp;
 		np = r->ifcall.data;
 		newmin = strtol(np, &rp, 10);
@@ -183,8 +205,9 @@ fs_write(Req *r)
 		sel.max = newmax;
 		normalize_sel();
 		update_selstr();
-		fcut->length = (sel.max - sel.min) * FrameSize;
+		fcut->length = (sel.max - sel.min);
 		r->ofcall.count = r->ifcall.count;
+		plumbsel();
 		respond(r, nil);
 	} else {
 		respond(r, "nope");
@@ -194,13 +217,9 @@ fs_write(Req *r)
 void
 fcut_open(Req *r)
 {
-	vlong min, max;
-	min = sel.min * FrameSize;
-	max = sel.max * FrameSize;
-
 	if ((r->ifcall.mode & OTRUNC) != 0) {
-		Page *maxpg = splitpage(&pg, max);
-		Page *minpg = splitpage(&pg, min);
+		Page *maxpg = splitpage(&pg, sel.max);
+		Page *minpg = splitpage(&pg, sel.min);
 		assert(minpg != nil);
 		assert(maxpg != nil);
 		if (minpg->prev != nil) {
@@ -216,11 +235,12 @@ fcut_open(Req *r)
 			minpg = fp->next;
 			freepage(fp);
 		}
-		pg.length -= max - min;
+		pg.length -= sel.max - sel.min;
 		fdata->length = pg.length;
 		fcut->length = 0;
 		sel.max = sel.min;
 		normalize_sel();
+		plumbsel();
 	}
 }
 
@@ -228,20 +248,18 @@ void
 fcut_write(Req *r)
 {
 	Page *maxpage;
-	vlong min, max, offset;
+	vlong offset;
 	long count;
-	min = sel.min * FrameSize;
-	max = sel.max * FrameSize;
 
-	maxpage = splitpage(&pg, max);
+	maxpage = splitpage(&pg, sel.max);
 	if (maxpage == nil) {
 		maxpage = addpage(&pg);
 	}
 	// insert more pages as needed
-	offset = r->ifcall.offset + min;
+	offset = r->ifcall.offset + sel.min;
 	count = r->ifcall.count;
-	while (offset + count > max) {
-		long n = offset + count - max;
+	while (offset + count > sel.max) {
+		long n = offset + count - sel.max;
 		if (n > PageSize) n = PageSize;
 		Page *ins = allocpage();
 		ins->as->len = n;
@@ -252,13 +270,13 @@ fcut_write(Req *r)
 			pg.start = ins;
 		}
 		maxpage->prev = ins;
-		max += n;
+		sel.max += n;
 		pg.length  += n;
 	}
-	sel.max = max / FrameSize;
 	normalize_sel();
-	fcut->length = (sel.max - sel.min) * FrameSize;
+	fcut->length = (sel.max - sel.min);
 	fdata->length = pg.length;
+	plumbsel();
 	// write to pagebuffer as usual
 	r->ofcall.count = pbwrite(&pg, r->ifcall.data, count, offset);
 }
@@ -266,7 +284,7 @@ fcut_write(Req *r)
 void
 normalize_sel(void)
 {
-	vlong bufmax = pg.length / FrameSize;
+	vlong bufmax = pg.length;
 	if (sel.min > bufmax) sel.min = bufmax;
 	if (sel.max > bufmax) sel.max = bufmax;
 	if (sel.min > sel.max) {
@@ -279,6 +297,6 @@ normalize_sel(void)
 void
 update_selstr(void)
 {
-	snprint(sel.str, sizeof(sel.str), "%11d %11d %11d \n",
-	  sel.min, sel.max, (int)(pg.length / FrameSize));
+	snprint(sel.str, sizeof(sel.str), "%11lld %11lld %11lld \n",
+	  sel.min, sel.max, pg.length);
 }
