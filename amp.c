@@ -9,6 +9,7 @@
 
 enum {
 	FrameSize = sizeof(s16int) * 2,
+	PBufLen = 1024 * FrameSize,
 	DHeight = 32,
 	DCacheSize = 32,
 	Zoomout = 512,
@@ -17,6 +18,10 @@ enum {
 	MIdle = 0,
 	MSelectStart = 1,
 	MSelect = 2,
+
+	PStop = 0,
+	PPlay = 1,
+	PPause = 2,
 };
 
 typedef struct DCache DCache;
@@ -38,6 +43,7 @@ int row(int);
 void drawscroll(int);
 void threadflush(void *);
 void threadselect(void *);
+void threadplay(void *);
 void threadplumb(void *);
 void msnarf(void);
 void mplumb(void);
@@ -66,6 +72,12 @@ struct {
 	int fid, len, mtime;
 	char *path;
 } pcm;
+struct {
+	char *path;
+	s8int *p;
+	int fid, state;
+	vlong len, cur;
+} play = {.path = "/dev/audio"};
 
 void
 threadmain(int argc, char **argv)
@@ -103,6 +115,7 @@ threadmain(int argc, char **argv)
 	proccreate(threadflush, nil, 1024);
 	threadcreate(threadselect, &mv, 1024);
 	proccreate(threadplumb, nil, 1024);
+	proccreate(threadplay, nil, 1024);
 
 	lockdisplay(display);
 	Ibg = allocimage(display, Rect(0,0,1,1), RGB24, 1, 0xBBBBBBFF);
@@ -127,6 +140,7 @@ threadmain(int argc, char **argv)
 			if (kv == Kup) drawscroll(-maxlines/3);
 			if (kv == Kpgdown) drawscroll(maxlines);
 			if (kv == Kpgup) drawscroll(-maxlines);
+			if (kv == ' ') play.state = (play.state == PPlay) ? PPause : PPlay;
 			break;
 		case 1: /* mouse */
 			if (mv.buttons == 0) mmode = MIdle;
@@ -211,6 +225,34 @@ threadplumb(void *)
 			setselect(s / (Zoomout * FrameSize), e / (Zoomout * FrameSize));
 		}
 		plumbfree(m);
+	}
+}
+
+void
+threadplay(void *)
+{
+	vlong n, pend;
+	if ((play.fid = open(play.path, OWRITE)) < 0) {
+		fprint(2, "%r\n");
+		return;
+	}
+	play.p = malloc(PBufLen);
+	if (play.p == nil) sysfatal("%r");
+	for (;;) {
+		switch (play.state) {
+		case PStop:
+			play.cur = smin * Zoomout * FrameSize;
+		case PPause:
+			sleep(1000/60);
+			break;
+		case PPlay:
+			pend = (smin != smax) ? smax * Zoomout * FrameSize : pcm.len;
+			n = (PBufLen < pend - play.cur) ? PBufLen : pend - play.cur;
+			n = pread(pcm.fid, play.p, n, play.cur);
+			n = write(play.fid, play.p, n);
+			play.cur += n;
+			if (play.cur >= pend) play.state = PStop;
+		}
 	}
 }
 
@@ -459,6 +501,6 @@ setselect(long s, long e)
 {
 	if (s < e) smin = s, smax = e;
 	else smax = s, smin = e;
+	play.state = PStop;
 	redraw(scroll * dwidth);
 }
-
