@@ -12,7 +12,6 @@ enum {
 	PBufLen = 1024 * FrameSize,
 	DHeight = 32,
 	DCacheSize = 32,
-	Zoomout = 512,
 	Margin = 4,
 
 	MIdle = 0,
@@ -32,36 +31,37 @@ struct DCache {
 	Image *img;
 };
 
-void usage(void);
-void clear(void);
-void drawpcm(Point, ulong);
-void redraw(ulong);
-void resize(void);
-void loadpcm(int);
 int fillrow(ulong, ulong);
 int row(int);
+void drawpcm(Point, ulong);
 void drawscroll(int);
-void threadflush(void *);
-void threadselect(void *);
-void threadplay(void *);
-void threadplumb(void *);
-void msnarf(void);
+void loadpcm(int);
+void mexit(void);
 void mplumb(void);
 void mredraw(void);
+void msnarf(void);
 void mwrite(void);
-void mexit(void);
+void mzoom(void);
+void redraw(ulong);
+void resize(void);
 void setselect(long, long);
+void threadflush(void *);
+void threadplay(void *);
+void threadplumb(void *);
+void threadselect(void *);
+void usage(void);
 
 DCache dcache[DCacheSize];
 long pcmlen, monolen, scroll, smin, smax;
+long Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg, *Irow;
 Rectangle rbars;
 int dwidth, needflush, maxlines, mmode;
-char wpath[256];
+char wpath[1024];
 Mousectl *mctl;
 Keyboardctl *kctl;
-char *menustr[] = {"snarf", "plumb", "redraw", "write", "exit", nil};
-void (*menufunc[])(void) = {msnarf, mplumb, mredraw, mwrite, mexit};
+char *menustr[] = {"snarf", "plumb", "redraw", "write", "zoom", "exit", nil};
+void (*menufunc[])(void) = {msnarf, mplumb, mredraw, mwrite, mzoom, mexit};
 Menu menu = {menustr, nil, 0};
 struct {
 	int send, recv;
@@ -123,7 +123,6 @@ threadmain(int argc, char **argv)
 	Itrfg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DBlack);
 	resize();
 	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight), CMAP8, 0, DBlue);
-	clear();
 	unlockdisplay(display);
 	redraw(0);
 	Alt alts[5] = {
@@ -160,7 +159,6 @@ threadmain(int argc, char **argv)
 			freeimage(Irow);
 			Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
 				CMAP8, 0, DBlue);
-			clear();
 			unlockdisplay(display);
 			redraw(scroll * dwidth);
 			break;
@@ -277,12 +275,6 @@ usage(void)
 	threadexitsall("usage");
 }
 
-void
-clear(void)
-{
-	draw(screen, screen->r, Ibg, nil, ZP);
-}
-
 Image *
 getmask(ulong start, ulong width)
 {
@@ -338,6 +330,9 @@ redraw(ulong d)
 {
 	Point p;
 	p = rbars.min;
+	lockdisplay(display);
+	draw(screen, screen->r, Ibg, nil, ZP);
+	unlockdisplay(display);
 	while (p.y < screen->r.max.y) {
 		if (d > pcm.len/(FrameSize * Zoomout)) break;
 		drawpcm(p, d);
@@ -364,9 +359,8 @@ loadpcm(int fd)
 int
 fillrow(ulong start, ulong width)
 {
-	u8int min, max;
+	int min, max, mono;
 	uint dmin, dmax;
-	int mono;
 	long bsize;
 	ulong n, i, j, rlen;
 	u8int *buf, *bp;
@@ -377,21 +371,22 @@ fillrow(ulong start, ulong width)
 	  start * FrameSize * Zoomout);
 	buf = malloc(bsize);
 	bp = buf;
-	min = 0x7f;
-	max = -0x7f;
+	min = 0xff;
+	max = 0;
 	for (i = 0, n = 0; (n < rlen) && (bp < buf + width); n += FrameSize, i++) {
-		mono = (rbuf[n + 1] + rbuf[n + 3] + 256) / 2;
+		mono = (rbuf[n + 1] + rbuf[n + 3] + 0xff) / 2;
 		if (min > mono) min = mono;
 		if (max < mono) max = mono;
 		if (i >= Zoomout) {
 			i = 0;
 			dmin = min * DHeight / 256;
 			dmax = max * DHeight / 256;
+			if (dmin == dmax) dmax ++;
 			for (j = 0; j < dmin; j++) *(bp + j * width) = 0xff;
 			for (j = dmin; j < dmax; j++) *(bp + j * width) = 0x00;
 			for (j = dmax; j < Dy(Irow->r); j++) *(bp + j * width) = 0xff;
-			min = 0x7f;
-			max = -0x7f;
+			min = 0xff;
+			max = 0;
 			bp++;
 		}
 	}
@@ -425,9 +420,6 @@ drawscroll(int ds)
 		scroll = monolen / (Zoomout * dwidth);
 	}
 	if (ds == 0) return;
-	lockdisplay(display);
-	clear();
-	unlockdisplay(display);
 	needflush = 1;
 	yield();
 	redraw(scroll * dwidth);
@@ -478,7 +470,7 @@ mwrite(void)
 {
 	int n, fd;
 	long min, max;
-	n = enter("write to:", wpath, 256, mctl, kctl, nil);
+	n = enter("write to:", wpath, 1024, mctl, kctl, nil);
 	if (n <= 0) return;
 	if ((fd = create(wpath, OWRITE, 0666)) < 0) {
 		fprint(2, "%r\n");
@@ -488,6 +480,24 @@ mwrite(void)
 	max = smax * Zoomout * FrameSize;
 	write(fd, pcm.p + min, max - min);
 	close(fd);
+}
+
+void
+mzoom(void)
+{
+	int n;
+	long nz;
+	char *s = malloc(1024);
+	snprint(s, 1024, "%ld", Zoomout);
+	n = enter("zoom", s, 1024, mctl, kctl, nil);
+	if (n <= 0) goto end;
+	nz = strtol(s, nil, 10);
+	if (nz > 0) {
+		Zoomout = nz;
+		redraw(scroll * dwidth);
+	}
+end:
+	free(s);
 }
 
 void
