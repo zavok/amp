@@ -42,7 +42,7 @@ void mredraw(void);
 void msnarf(void);
 void mwrite(void);
 void mzoom(void);
-void redraw(ulong);
+void redraw(void);
 void resize(void);
 void setselect(long, long);
 void threadflush(void *);
@@ -124,7 +124,7 @@ threadmain(int argc, char **argv)
 	resize();
 	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight), CMAP8, 0, DBlue);
 	unlockdisplay(display);
-	redraw(0);
+	redraw();
 	Alt alts[5] = {
 		{kctl->c, &kv, CHANRCV},
 		{mctl->c, &mv, CHANRCV},
@@ -160,7 +160,7 @@ threadmain(int argc, char **argv)
 			Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
 				CMAP8, 0, DBlue);
 			unlockdisplay(display);
-			redraw(scroll * dwidth);
+			redraw();
 			break;
 		}
 	}
@@ -326,13 +326,15 @@ drawpcm(Point p, ulong start)
 }
 
 void
-redraw(ulong d)
+redraw(void)
 {
+	ulong d;
 	Point p;
 	p = rbars.min;
 	lockdisplay(display);
 	draw(screen, screen->r, Ibg, nil, ZP);
 	unlockdisplay(display);
+	d = scroll * dwidth;
 	while (p.y < screen->r.max.y) {
 		if (d > pcm.len/(FrameSize * Zoomout)) break;
 		drawpcm(p, d);
@@ -422,7 +424,7 @@ drawscroll(int ds)
 	if (ds == 0) return;
 	needflush = 1;
 	yield();
-	redraw(scroll * dwidth);
+	redraw();
 	needflush = 1;
 }
 
@@ -462,7 +464,7 @@ mplumb(void)
 void
 mredraw(void)
 {
-	redraw(scroll * dwidth);
+	redraw();
 }
 
 void
@@ -494,7 +496,7 @@ mzoom(void)
 	nz = strtol(s, nil, 10);
 	if (nz > 0) {
 		Zoomout = nz;
-		redraw(scroll * dwidth);
+		redraw();
 	}
 end:
 	free(s);
@@ -512,5 +514,5 @@ setselect(long s, long e)
 	if (s < e) smin = s, smax = e;
 	else smax = s, smin = e;
 	play.state = PStop;
-	redraw(scroll * dwidth);
+	redraw();
 }
