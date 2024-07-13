@@ -11,7 +11,7 @@ enum {
 	FrameSize = sizeof(s16int) * 2,
 	PBufLen = 1024 * FrameSize,
 	DHeight = 32,
-	DCacheSize = 32,
+	MaskCacheSize = 256,
 	Margin = 4,
 
 	MIdle = 0,
@@ -23,15 +23,13 @@ enum {
 	PPause = 2,
 };
 
-typedef struct DCache DCache;
-
-struct DCache {
+typedef struct MaskCache MaskCache;
+struct MaskCache {
 	int c;
 	ulong start;
 	Image *img;
 };
 
-int fillrow(ulong, ulong);
 int row(int);
 void drawpcm(Point, ulong);
 void drawscroll(int);
@@ -50,13 +48,17 @@ void threadplay(void *);
 void threadplumb(void *);
 void threadselect(void *);
 void usage(void);
+void drawmask(Image *, ulong, ulong);
+void clearmaskcache(void);
 
-DCache dcache[DCacheSize];
+Image * getmask(ulong, ulong);
+
+MaskCache maskcache[MaskCacheSize];
 long pcmlen, monolen, scroll, smin, smax;
 long Zoomout = 512;
-Image *Ibg, *Itrbg, *Itrfg, *Irow;
+Image *Ibg, *Itrbg, *Itrfg;
 Rectangle rbars;
-int dwidth, needflush, maxlines, mmode;
+int dwidth, needflush, maxlines, mmode, mccount;
 char wpath[1024];
 Mousectl *mctl;
 Keyboardctl *kctl;
@@ -122,7 +124,7 @@ threadmain(int argc, char **argv)
 	Itrbg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DWhite);
 	Itrfg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DBlack);
 	resize();
-	Irow = allocimage(display, Rect(0, 0, dwidth, DHeight), CMAP8, 0, DBlue);
+	clearmaskcache();
 	unlockdisplay(display);
 	redraw();
 	Alt alts[5] = {
@@ -156,9 +158,7 @@ threadmain(int argc, char **argv)
 			if(getwindow(display, Refnone) < 0)
 				sysfatal("resize failed: %r");
 			resize();
-			freeimage(Irow);
-			Irow = allocimage(display, Rect(0, 0, dwidth, DHeight),
-				CMAP8, 0, DBlue);
+			clearmaskcache();
 			unlockdisplay(display);
 			redraw();
 			break;
@@ -278,11 +278,25 @@ usage(void)
 Image *
 getmask(ulong start, ulong width)
 {
-	Rectangle r;
-	r = Irow->r;
-	r.max.x = r.min.x + fillrow(start, width);
-	replclipr(Irow, 0, r);
-	return Irow;
+	int i, m, c;
+	for (i = 0, m = -1, c = 0; i < MaskCacheSize; i++) {
+		if (maskcache[i].c <= maskcache[c].c) c = i;
+		if (start == maskcache[i].start) {
+			m = i;
+			break;
+		}
+	}
+	if (m < 0) {
+		m = c;
+		maskcache[m].c = ++mccount;
+		maskcache[m].start = start;
+		if (maskcache[m].img == nil) {
+			maskcache[m].img = allocimage(display, Rect(0, 0, dwidth, DHeight),
+			  CMAP8, 0, DBlack);
+		}
+		drawmask(maskcache[m].img, start, width);
+	}
+	return maskcache[m].img;
 }
 
 void
@@ -358,8 +372,8 @@ loadpcm(int fd)
 	free(buf);
 }
 
-int
-fillrow(ulong start, ulong width)
+void
+drawmask(Image *mask, ulong start, ulong width)
 {
 	int min, max, mono;
 	uint dmin, dmax;
@@ -367,7 +381,7 @@ fillrow(ulong start, ulong width)
 	ulong n, i, j, rlen;
 	u8int *buf, *bp;
 	s8int *rbuf;
-	bsize = width * Dy(Irow->r);
+	bsize = width * Dy(mask->r);
 	rbuf = mallocz(width * FrameSize * Zoomout, 1);
 	rlen = pread(pcm.fid, rbuf, width * FrameSize * Zoomout,
 	  start * FrameSize * Zoomout);
@@ -386,21 +400,21 @@ fillrow(ulong start, ulong width)
 			if (dmin == dmax) dmax ++;
 			for (j = 0; j < dmin; j++) *(bp + j * width) = 0xff;
 			for (j = dmin; j < dmax; j++) *(bp + j * width) = 0x00;
-			for (j = dmax; j < Dy(Irow->r); j++) *(bp + j * width) = 0xff;
+			for (j = dmax; j < Dy(mask->r); j++) *(bp + j * width) = 0xff;
 			min = 0xff;
 			max = 0;
 			bp++;
 		}
 	}
 	Rectangle r;
-	r = Irow->r;
+	r = mask->r;
 	r.max.x = r.min.x + width;
 	lockdisplay(display);
-	loadimage(Irow, r, buf, bsize);
+	loadimage(mask, r, buf, bsize);
+	replclipr(mask, 0, r);
 	unlockdisplay(display);
 	free(buf);
 	free(rbuf);
-	return bp - buf;
 }
 
 int
@@ -515,4 +529,18 @@ setselect(long s, long e)
 	else smax = s, smin = e;
 	play.state = PStop;
 	redraw();
+}
+
+void
+clearmaskcache(void)
+{
+	int i;
+	for (i = 0; i < MaskCacheSize; i++) {
+		maskcache[i].c = -1;
+		maskcache[i].start = -1;
+		if (maskcache[i].img != nil) {
+			freeimage(maskcache[i].img);
+			maskcache[i].img = nil;
+		}
+	}
 }
