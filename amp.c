@@ -46,7 +46,7 @@ void threadplumb(void *);
 void threadselect(void *);
 void usage(void);
 
-long pcmlen, monolen, scroll, smin, smax;
+long monolen, scroll, smin, smax;
 long Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg;
 Rectangle rbars;
