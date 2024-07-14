@@ -23,10 +23,10 @@ enum {
 	PPause = 2,
 };
 
-Image * getmask(ulong, ulong);
+Image * getmask(ulong);
 int row(int);
 void clearmask(void);
-void drawmask(Image *, ulong, ulong);
+void drawmask(Image *, ulong);
 void drawpcm(Point, ulong);
 void drawscroll(int);
 void loadpcm(int);
@@ -274,7 +274,7 @@ usage(void)
 }
 
 Image *
-getmask(ulong start, ulong width)
+getmask(ulong start)
 {
 	int i, m, c;
 	for (i = 0, m = -1, c = 0; i < MaskCacheSize; i++) {
@@ -290,9 +290,9 @@ getmask(ulong start, ulong width)
 		mask.start[m] = start;
 		if (mask.img[m] == nil) {
 			mask.img[m] = allocimage(display, Rect(0, 0, dwidth, DHeight),
-			  CMAP8, 0, DBlack);
+			  CMAP8, 0, DBlue);
 		}
-		drawmask(mask.img[m], start, width);
+		drawmask(mask.img[m], start);
 	}
 	return mask.img[m];
 }
@@ -303,7 +303,7 @@ drawpcm(Point p, ulong start)
 	Image *mask;
 	Rectangle r;
 	long w;
-	mask = getmask(start, dwidth);
+	mask = getmask(start);
 	r.min = p;
 	r.max.x = p.x + Dx(mask->clipr);
 	r.max.y = p.y + DHeight;
@@ -371,44 +371,46 @@ loadpcm(int fd)
 }
 
 void
-drawmask(Image *mask, ulong start, ulong width)
+drawmask(Image *mask, ulong start)
 {
+	Rectangle r;
 	int min, max, mono;
-	uint dmin, dmax;
 	long bsize;
-	ulong n, i, j, rlen;
-	u8int *buf, *bp;
 	s8int *rbuf;
-	bsize = width * Dy(mask->r);
-	rbuf = mallocz(width * FrameSize * Zoomout, 1);
-	rlen = pread(pcm.fid, rbuf, width * FrameSize * Zoomout,
-	  start * FrameSize * Zoomout);
-	buf = malloc(bsize);
+	u8int *buf, *bp;
+	uint dmin, dmax;
+	ulong n, i, j, rlen, FZ;
+
+	FZ = FrameSize * Zoomout;
+	rbuf = malloc(dwidth * FZ);
+	rlen = pread(pcm.fid, rbuf, dwidth * FZ, start * FZ);
+	bsize = dwidth * DHeight;
+	buf = mallocz(bsize, 1);
 	bp = buf;
 	min = 0xff;
 	max = 0;
-	for (i = 0, n = 0; (n < rlen) && (bp < buf + width); n += FrameSize, i++) {
+	i = 0;
+	for (n = 0; (n < rlen) && (bp < buf + dwidth); n += FrameSize) {
 		mono = (rbuf[n + 1] + rbuf[n + 3] + 0xff) / 2;
 		if (min > mono) min = mono;
 		if (max < mono) max = mono;
-		if (i >= Zoomout) {
+		if (i >= Zoomout - 1) {
 			i = 0;
 			dmin = min * DHeight / 256;
 			dmax = max * DHeight / 256;
-			if (dmin == dmax) dmax ++;
-			for (j = 0; j < dmin; j++) *(bp + j * width) = 0xff;
-			for (j = dmin; j < dmax; j++) *(bp + j * width) = 0x00;
-			for (j = dmax; j < Dy(mask->r); j++) *(bp + j * width) = 0xff;
+			if (dmin == dmax) dmax++;
+			for (j = 0; j < dmin; j++) *(bp + j * dwidth) = 0xff;
+			for (j = dmin; j < dmax; j++) *(bp + j * dwidth) = 0x00;
+			for (j = dmax; j < Dy(mask->r); j++) *(bp + j * dwidth) = 0xff;
 			min = 0xff;
 			max = 0;
 			bp++;
-		}
+		} else i++;
 	}
-	Rectangle r;
 	r = mask->r;
-	r.max.x = r.min.x + width;
+	r.max.x = r.min.x + rlen / FZ;
 	lockdisplay(display);
-	loadimage(mask, r, buf, bsize);
+	loadimage(mask, mask->r, buf, bsize);
 	replclipr(mask, 0, r);
 	unlockdisplay(display);
 	free(buf);
