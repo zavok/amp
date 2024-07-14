@@ -23,14 +23,10 @@ enum {
 	PPause = 2,
 };
 
-typedef struct MaskCache MaskCache;
-struct MaskCache {
-	int c;
-	ulong start;
-	Image *img;
-};
-
+Image * getmask(ulong, ulong);
 int row(int);
+void clearmask(void);
+void drawmask(Image *, ulong, ulong);
 void drawpcm(Point, ulong);
 void drawscroll(int);
 void loadpcm(int);
@@ -48,12 +44,7 @@ void threadplay(void *);
 void threadplumb(void *);
 void threadselect(void *);
 void usage(void);
-void drawmask(Image *, ulong, ulong);
-void clearmaskcache(void);
 
-Image * getmask(ulong, ulong);
-
-MaskCache maskcache[MaskCacheSize];
 long pcmlen, monolen, scroll, smin, smax;
 long Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg;
@@ -80,6 +71,13 @@ struct {
 	int fid, state;
 	vlong len, cur;
 } play = {.path = "/dev/audio"};
+struct {
+	Image *img[MaskCacheSize];
+	ulong start[MaskCacheSize];
+	ulong c[MaskCacheSize];
+	ulong count;
+} mask;
+
 
 void
 threadmain(int argc, char **argv)
@@ -124,7 +122,7 @@ threadmain(int argc, char **argv)
 	Itrbg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DWhite);
 	Itrfg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DBlack);
 	resize();
-	clearmaskcache();
+	clearmask();
 	unlockdisplay(display);
 	redraw();
 	Alt alts[5] = {
@@ -158,7 +156,7 @@ threadmain(int argc, char **argv)
 			if(getwindow(display, Refnone) < 0)
 				sysfatal("resize failed: %r");
 			resize();
-			clearmaskcache();
+			clearmask();
 			unlockdisplay(display);
 			redraw();
 			break;
@@ -280,23 +278,23 @@ getmask(ulong start, ulong width)
 {
 	int i, m, c;
 	for (i = 0, m = -1, c = 0; i < MaskCacheSize; i++) {
-		if (maskcache[i].c <= maskcache[c].c) c = i;
-		if (start == maskcache[i].start) {
+		if (mask.c[i] <= mask.c[c]) c = i;
+		if (start == mask.start[i]) {
 			m = i;
 			break;
 		}
 	}
 	if (m < 0) {
 		m = c;
-		maskcache[m].c = ++mccount;
-		maskcache[m].start = start;
-		if (maskcache[m].img == nil) {
-			maskcache[m].img = allocimage(display, Rect(0, 0, dwidth, DHeight),
+		mask.c[m] = ++mask.count;
+		mask.start[m] = start;
+		if (mask.img[m] == nil) {
+			mask.img[m] = allocimage(display, Rect(0, 0, dwidth, DHeight),
 			  CMAP8, 0, DBlack);
 		}
-		drawmask(maskcache[m].img, start, width);
+		drawmask(mask.img[m], start, width);
 	}
-	return maskcache[m].img;
+	return mask.img[m];
 }
 
 void
@@ -532,15 +530,16 @@ setselect(long s, long e)
 }
 
 void
-clearmaskcache(void)
+clearmask(void)
 {
 	int i;
 	for (i = 0; i < MaskCacheSize; i++) {
-		maskcache[i].c = -1;
-		maskcache[i].start = -1;
-		if (maskcache[i].img != nil) {
-			freeimage(maskcache[i].img);
-			maskcache[i].img = nil;
+		mask.c[i] = -1;
+		mask.start[i] = -1;
+		if (mask.img[i] != nil) {
+			freeimage(mask.img[i]);
+			mask.img[i] = nil;
 		}
 	}
+	mask.count = 0;
 }
