@@ -16,7 +16,8 @@ enum {
 
 	MIdle = 0,
 	MSelectStart = 1,
-	MSelect = 2,
+	MSelectIdle = 2,
+	MSelect = 3,
 
 	PStop = 0,
 	PPlay = 1,
@@ -195,11 +196,19 @@ threadselect(void *v)
 		}
 		switch (mmode) {
 		case MSelectStart:
-			mmode = MSelect;
+			mmode = MSelectIdle;
+			se = p;
 			ss = p;
+			setselect(ss, se);
+			break;
+		case MSelectIdle:
+			if (p == se) break;
+			mmode = MSelect;
 		case MSelect:
 			se = p;
 			setselect(ss, se);
+			mmode = MSelectIdle;
+			break;
 		}
 		yield();
 	}
