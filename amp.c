@@ -25,11 +25,11 @@ enum {
 	PPause = 2,
 };
 
-Image * getmask(ulong);
+Image * getmask(int);
 int row(int);
 void clearmask(void);
-void drawmask(Image *, ulong);
-void drawpcm(Point, ulong);
+void drawmask(Image *, int);
+void drawpcm(Point, int);
 void drawscroll(int);
 void drawscrollbar(void);
 void loadpcm(int);
@@ -51,7 +51,7 @@ void usage(void);
 long monolen, scroll, smin, smax, Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg;
 Rectangle rbars;
-int dwidth, needflush, maxlines, mmode;
+int dwidth, needflush, maxbars, mmode;
 char wpath[1024];
 Mousectl *mctl;
 Keyboardctl *kctl;
@@ -75,11 +75,8 @@ struct {
 } play = {.path = "/dev/audio"};
 struct {
 	Image *img[MaskCacheSize];
-	ulong start[MaskCacheSize];
-	ulong c[MaskCacheSize];
-	ulong count;
+	int id[MaskCacheSize];
 } mask;
-
 
 void
 threadmain(int argc, char **argv)
@@ -137,10 +134,10 @@ threadmain(int argc, char **argv)
 		switch (alt(alts)) {
 		case 0: /* keyboard */
 			if (kv == 0x7f) threadexitsall(nil);
-			if (kv == Kdown) drawscroll(maxlines/3);
-			if (kv == Kup) drawscroll(-maxlines/3);
-			if (kv == Kpgdown) drawscroll(maxlines);
-			if (kv == Kpgup) drawscroll(-maxlines);
+			if (kv == Kdown) drawscroll(maxbars/3);
+			if (kv == Kup) drawscroll(-maxbars/3);
+			if (kv == Kpgdown) drawscroll(maxbars);
+			if (kv == Kpgup) drawscroll(-maxbars);
 			if (kv == ' ') play.state = (play.state == PPlay) ? PPause : PPlay;
 			break;
 		case 1: /* mouse */
@@ -273,7 +270,7 @@ resize(void)
 	dwidth = Dx(rbars);
 	if (scroll > pcm.len/(FrameSize * Zoomout * dwidth))
 		scroll = pcm.len/(FrameSize * Zoomout * dwidth);
-	maxlines = Dy(rbars) / (DHeight + Margin);
+	maxbars = Dy(rbars) / (DHeight + Margin);
 }
 
 void
@@ -284,41 +281,34 @@ usage(void)
 }
 
 Image *
-getmask(ulong start)
+getmask(int n)
 {
-	int i, m, c;
-	for (i = 0, m = -1, c = 0; i < MaskCacheSize; i++) {
-		if (mask.c[i] <= mask.c[c]) c = i;
-		if (start == mask.start[i]) {
-			m = i;
-			break;
-		}
-	}
-	if (m < 0) {
-		m = c;
-		mask.c[m] = ++mask.count;
-		mask.start[m] = start;
+	int m;
+	m = n % MaskCacheSize;
+	if (mask.id[m] != n) {
+		mask.id[m] = n;
 		if (mask.img[m] == nil) {
 			mask.img[m] = allocimage(display, Rect(0, 0, dwidth, DHeight),
 			  CMAP8, 0, DBlue);
 		}
-		drawmask(mask.img[m], start);
+		drawmask(mask.img[m], n);
 	}
 	return mask.img[m];
 }
 
 void
-drawpcm(Point p, ulong start)
+drawpcm(Point p, int n)
 {
 	Image *mask;
 	Rectangle r;
 	long w;
-	mask = getmask(start);
+	ulong start;
+	mask = getmask(n);
 	r.min = p;
 	r.max.x = p.x + Dx(mask->clipr);
 	r.max.y = p.y + DHeight;
 	if (r.max.y > rbars.max.y) r.max.y = rbars.max.y;
-
+	start = n * dwidth;
 	lockdisplay(display);
 	if (start < smin) {
 		w = smin - start;
@@ -351,18 +341,18 @@ drawpcm(Point p, ulong start)
 void
 redraw(void)
 {
-	ulong d;
+	int d;
 	Point p;
 	p = rbars.min;
 	lockdisplay(display);
 	draw(screen, screen->r, Ibg, nil, ZP);
 	unlockdisplay(display);
 	drawscrollbar();
-	d = scroll * dwidth;
+	d = scroll;
 	while (p.y < screen->r.max.y) {
-		if (d > pcm.len/(FrameSize * Zoomout)) break;
+		if (d * dwidth > pcm.len / (FrameSize * Zoomout)) break;
 		drawpcm(p, d);
-		d += dwidth;
+		d++;
 		p.y += DHeight + Margin;
 	}
 }
@@ -383,7 +373,7 @@ loadpcm(int fd)
 }
 
 void
-drawmask(Image *mask, ulong start)
+drawmask(Image *mask, int bn)
 {
 	Rectangle r;
 	int min, max, mono;
@@ -391,8 +381,8 @@ drawmask(Image *mask, ulong start)
 	s8int *rbuf;
 	u8int *buf, *bp;
 	uint dmin, dmax;
-	ulong n, i, j, rlen, FZ;
-
+	ulong n, i, j, rlen, FZ, start;
+	start = bn * dwidth;
 	FZ = FrameSize * Zoomout;
 	rbuf = malloc(dwidth * FZ);
 	rlen = pread(pcm.fid, rbuf, dwidth * FZ, start * FZ);
@@ -468,7 +458,7 @@ drawscrollbar(void)
 	tl = pcm.len / (FrameSize * Zoomout * dwidth);
 
 	offset = scroll * Dy(rbars) / tl;
-	width = maxlines * Dy(rbars) / tl;
+	width = maxbars * Dy(rbars) / tl;
 	
 	br = Rect(
 	  r.min.x,
@@ -576,12 +566,10 @@ clearmask(void)
 {
 	int i;
 	for (i = 0; i < MaskCacheSize; i++) {
-		mask.c[i] = -1;
-		mask.start[i] = -1;
+		mask.id[i] = -1;
 		if (mask.img[i] != nil) {
 			freeimage(mask.img[i]);
 			mask.img[i] = nil;
 		}
 	}
-	mask.count = 0;
 }
