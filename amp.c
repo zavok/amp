@@ -12,6 +12,7 @@ enum {
 	PBufLen = 1024 * FrameSize,
 	DHeight = 32,
 	MaskCacheSize = 256,
+	ScrollBarWidth = 12,
 	Margin = 4,
 
 	MIdle = 0,
@@ -30,6 +31,7 @@ void clearmask(void);
 void drawmask(Image *, ulong);
 void drawpcm(Point, ulong);
 void drawscroll(int);
+void drawscrollbar(void);
 void loadpcm(int);
 void mexit(void);
 void mplumb(void);
@@ -46,11 +48,10 @@ void threadplumb(void *);
 void threadselect(void *);
 void usage(void);
 
-long monolen, scroll, smin, smax;
-long Zoomout = 512;
+long monolen, scroll, smin, smax, Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg;
 Rectangle rbars;
-int dwidth, needflush, maxlines, mmode, mccount;
+int dwidth, needflush, maxlines, mmode;
 char wpath[1024];
 Mousectl *mctl;
 Keyboardctl *kctl;
@@ -264,12 +265,12 @@ threadplay(void *)
 void
 resize(void)
 {
-	dwidth = Dx(screen->r) - Margin * 2;
 	rbars = screen->r;
-	rbars.min.x += Margin;
+	rbars.min.x += 2 * Margin + ScrollBarWidth;
 	rbars.max.x -= Margin;
 	rbars.min.y += Margin;
 	rbars.max.y -= Margin;
+	dwidth = Dx(rbars);
 	if (scroll > pcm.len/(FrameSize * Zoomout * dwidth))
 		scroll = pcm.len/(FrameSize * Zoomout * dwidth);
 	maxlines = Dy(rbars) / (DHeight + Margin);
@@ -316,6 +317,7 @@ drawpcm(Point p, ulong start)
 	r.min = p;
 	r.max.x = p.x + Dx(mask->clipr);
 	r.max.y = p.y + DHeight;
+	if (r.max.y > rbars.max.y) r.max.y = rbars.max.y;
 
 	lockdisplay(display);
 	if (start < smin) {
@@ -355,6 +357,7 @@ redraw(void)
 	lockdisplay(display);
 	draw(screen, screen->r, Ibg, nil, ZP);
 	unlockdisplay(display);
+	drawscrollbar();
 	d = scroll * dwidth;
 	while (p.y < screen->r.max.y) {
 		if (d > pcm.len/(FrameSize * Zoomout)) break;
@@ -449,6 +452,34 @@ drawscroll(int ds)
 	yield();
 	redraw();
 	needflush = 1;
+}
+
+void
+drawscrollbar(void)
+{
+	Rectangle r, br;
+	int tl, offset, width;
+	r = screen->r;
+	r.min.x += Margin;
+	r.min.y += Margin;
+	r.max.x = r.min.x + ScrollBarWidth;
+	r.max.y -= Margin;
+
+	tl = pcm.len / (FrameSize * Zoomout * dwidth);
+
+	offset = scroll * Dy(rbars) / tl;
+	width = maxlines * Dy(rbars) / tl;
+	
+	br = Rect(
+	  r.min.x,
+	  r.min.y + offset,
+	  r.max.x,
+	  r.min.y + offset + width);
+	if (br.max.y > r.max.y) br.max.y = r.max.y;
+	lockdisplay(display);
+	draw(screen, r, Itrbg, nil, ZP);
+	draw(screen, br, Itrfg, nil, ZP);
+	unlockdisplay(display);
 }
 
 void
