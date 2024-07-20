@@ -27,7 +27,9 @@ enum {
 
 Image * getmask(int);
 int row(int);
+void clearcursor(void);
 void clearmask(void);
+void drawcursor(void);
 void drawmask(Image *, int);
 void drawpcm(Point, int);
 void drawscroll(int);
@@ -49,7 +51,7 @@ void threadselect(void *);
 void usage(void);
 
 long monolen, scroll, smin, smax, Zoomout = 512;
-Image *Ibg, *Itrbg, *Itrfg;
+Image *Ibg, *Itrbg, *Itrfg, *Icur;
 Rectangle rbars;
 int dwidth, needflush, maxbars, mmode;
 char wpath[1024];
@@ -120,6 +122,7 @@ threadmain(int argc, char **argv)
 	Ibg = allocimage(display, Rect(0,0,1,1), RGB24, 1, 0xBBBBBBFF);
 	Itrbg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DWhite);
 	Itrfg = allocimage(display, Rect(0,0,1,1), RGB24, 1, DBlack);
+	Icur = allocimage(display, Rect(0,0,1,1), RGB24, 1, DRed);
 	resize();
 	clearmask();
 	unlockdisplay(display);
@@ -253,8 +256,11 @@ threadplay(void *)
 			n = (PBufLen < pend - play.cur) ? PBufLen : pend - play.cur;
 			n = pread(pcm.fid, play.p, n, play.cur);
 			n = write(play.fid, play.p, n);
+			clearcursor();
 			play.cur += n;
+			drawcursor();
 			if (play.cur >= pend) play.state = PStop;
+			needflush = 1;
 		}
 	}
 }
@@ -355,6 +361,7 @@ redraw(void)
 		d++;
 		p.y += DHeight + Margin;
 	}
+	drawcursor();
 }
 
 void
@@ -558,7 +565,62 @@ setselect(long s, long e)
 	if (s < e) smin = s, smax = e;
 	else smax = s, smin = e;
 	play.state = PStop;
+	play.cur = smin * FrameSize * Zoomout;
 	redraw();
+}
+
+void
+clearcursor(void)
+{
+	int b, n, m;
+	Rectangle r;
+	Image *mask, *bg, *fg;
+	b = play.cur / (FrameSize * Zoomout);
+	n = b / dwidth;
+	m = b % dwidth;
+	if ((n < scroll) || (n >= scroll + maxbars)) return;
+	mask = getmask(n);
+
+	n -= scroll;
+	r.min.y = rbars.min.y + n * (DHeight + Margin);
+	r.max.y = r.min.y + DHeight;
+	r.min.x = rbars.min.x + m;
+	r.max.x = r.min.x + 1;
+
+	if ((b < smin) || (b >= smax)) {
+		bg = Itrfg;
+		fg = Itrbg;
+	} else {
+		bg = Itrbg;
+		fg = Itrfg;
+	}
+	lockdisplay(display);
+	draw(screen, r, bg, 0, ZP);
+	draw(screen, r, fg, mask, Pt(m, 0));
+	unlockdisplay(display);
+	needflush = 1;
+}
+
+void
+drawcursor(void)
+{
+	int b, n, m;
+	Rectangle r;
+	b = play.cur / (FrameSize * Zoomout);
+	n = b / dwidth;
+	m = b % dwidth;
+	if ((n < scroll) || (n >= scroll + maxbars)) return;
+	n -= scroll;
+	r.min.y = rbars.min.y + n * (DHeight + Margin);
+	r.max.y = r.min.y + DHeight;
+	r.min.x = rbars.min.x + m;
+	r.max.x = r.min.x + 1;
+
+
+	lockdisplay(display);
+	draw(screen, r, Icur, 0, ZP);
+	unlockdisplay(display);
+	needflush = 1;
 }
 
 void
