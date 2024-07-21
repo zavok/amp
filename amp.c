@@ -35,6 +35,7 @@ void drawpcm(Point, int);
 void drawscroll(int);
 void drawscrollbar(void);
 void loadpcm(int);
+void mouseidle(Mouse);
 void mexit(void);
 void mplumb(void);
 void mredraw(void);
@@ -52,13 +53,14 @@ void usage(void);
 
 long monolen, scroll, smin, smax, Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg, *Icur;
-Rectangle rbars;
+Rectangle rscroll, rbars;
 int dwidth, needflush, maxbars, mmode;
 char wpath[1024];
 Mousectl *mctl;
 Keyboardctl *kctl;
 char *menustr[] = {"snarf", "plumb", "redraw", "write", "zoom", "exit", nil};
 void (*menufunc[])(void) = {msnarf, mplumb, mredraw, mwrite, mzoom, mexit};
+void (*mousefp)(Mouse) = mouseidle;
 Menu menu = {menustr, nil, 0};
 struct {
 	int send, recv;
@@ -144,14 +146,7 @@ threadmain(int argc, char **argv)
 			if (kv == ' ') play.state = (play.state == PPlay) ? PPause : PPlay;
 			break;
 		case 1: /* mouse */
-			if (mv.buttons == 0) mmode = MIdle;
-			if ((mv.buttons == 1) && (mmode == MIdle)) mmode = MSelectStart;
-			if (mv.buttons == 4) {
-				int n = menuhit(3, mctl, &menu, nil);
-				if (n >= 0) menufunc[n]();
-			}
-			if (mv.buttons == 8) drawscroll(-1-row(mv.xy.y));
-			if (mv.buttons == 16) drawscroll(1+row(mv.xy.y));
+			mousefp(mv);
 			break;
 		case 2: /* resize */
 			lockdisplay(display);
@@ -266,8 +261,27 @@ threadplay(void *)
 }
 
 void
+mouseidle(Mouse mv)
+{
+	if (mv.buttons == 0) mmode = MIdle;
+	if ((mv.buttons == 1) && (mmode == MIdle)) mmode = MSelectStart;
+	if ((mv.buttons == 4) && (mmode == MIdle)) {
+		int n = menuhit(3, mctl, &menu, nil);
+		if (n >= 0) menufunc[n]();
+	}
+	if (mv.buttons == 8) drawscroll(-1-row(mv.xy.y));
+	if (mv.buttons == 16) drawscroll(1+row(mv.xy.y));
+}
+
+void
 resize(void)
 {
+	rscroll = screen->r;
+	rscroll.min.x += Margin;
+	rscroll.min.y += Margin;
+	rscroll.max.x = rscroll.min.x + ScrollBarWidth;
+	rscroll.max.y -= Margin;
+
 	rbars = screen->r;
 	rbars.min.x += 2 * Margin + ScrollBarWidth;
 	rbars.max.x -= Margin;
@@ -456,11 +470,7 @@ drawscrollbar(void)
 {
 	Rectangle r, br;
 	int tl, offset, width;
-	r = screen->r;
-	r.min.x += Margin;
-	r.min.y += Margin;
-	r.max.x = r.min.x + ScrollBarWidth;
-	r.max.y -= Margin;
+	r = rscroll;
 
 	tl = pcm.len / (FrameSize * Zoomout * dwidth);
 
@@ -515,6 +525,7 @@ mplumb(void)
 void
 mredraw(void)
 {
+	clearmask();
 	redraw();
 }
 
@@ -547,6 +558,7 @@ mzoom(void)
 	nz = strtol(s, nil, 10);
 	if (nz > 0) {
 		Zoomout = nz;
+		clearmask();
 		redraw();
 	}
 end:
