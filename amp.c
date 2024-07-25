@@ -15,17 +15,13 @@ enum {
 	ScrollBarWidth = 12,
 	Margin = 4,
 
-	MIdle = 0,
-	MSelectStart = 1,
-	MSelectIdle = 2,
-	MSelect = 3,
-
 	PStop = 0,
 	PPlay = 1,
 	PPause = 2,
 };
 
 Image * getmask(int);
+long decoord(Point);
 int row(int);
 void clearcursor(void);
 void clearmask(void);
@@ -36,6 +32,8 @@ void drawscroll(int);
 void drawscrollbar(void);
 void loadpcm(int);
 void mouseidle(Mouse);
+void mousescroll(Mouse);
+void mouseselect(Mouse);
 void mexit(void);
 void mplumb(void);
 void mredraw(void);
@@ -48,13 +46,12 @@ void setselect(long, long);
 void threadflush(void *);
 void threadplay(void *);
 void threadplumb(void *);
-void threadselect(void *);
 void usage(void);
 
-long monolen, scroll, smin, smax, Zoomout = 512;
+long monolen, scroll, smin, smax, ss, se, Zoomout = 512;
 Image *Ibg, *Itrbg, *Itrfg, *Icur;
 Rectangle rscroll, rbars;
-int dwidth, needflush, maxbars, mmode;
+int dwidth, needflush, maxbars;
 char wpath[1024];
 Mousectl *mctl;
 Keyboardctl *kctl;
@@ -116,7 +113,6 @@ threadmain(int argc, char **argv)
 	unlockdisplay(display);
 
 	proccreate(threadflush, nil, 1024);
-	threadcreate(threadselect, &mv, 1024);
 	proccreate(threadplumb, nil, 1024);
 	proccreate(threadplay, nil, 1024);
 
@@ -177,40 +173,6 @@ threadflush(void *)
 }
 
 void
-threadselect(void *v)
-{
-	int p;
-	static ulong ss, se;
-	Mouse *mv;
-	threadsetname("select");
-	mv = v;
-	for (;;) {
-		p = (scroll + row(mv->xy.y)) * dwidth + mv->xy.x - rbars.min.x;
-		if (p < 0) p = 0;
-		if (p > monolen / Zoomout) {
-			p = monolen / Zoomout;
-		}
-		switch (mmode) {
-		case MSelectStart:
-			mmode = MSelectIdle;
-			se = p;
-			ss = p;
-			setselect(ss, se);
-			break;
-		case MSelectIdle:
-			if (p == se) break;
-			mmode = MSelect;
-		case MSelect:
-			se = p;
-			setselect(ss, se);
-			mmode = MSelectIdle;
-			break;
-		}
-		yield();
-	}
-}
-
-void
 threadplumb(void *)
 {
 	Plumbmsg *m;
@@ -263,14 +225,69 @@ threadplay(void *)
 void
 mouseidle(Mouse mv)
 {
-	if (mv.buttons == 0) mmode = MIdle;
-	if ((mv.buttons == 1) && (mmode == MIdle)) mmode = MSelectStart;
-	if ((mv.buttons == 4) && (mmode == MIdle)) {
-		int n = menuhit(3, mctl, &menu, nil);
+	int n;
+	if ((mv.buttons != 0) && (ptinrect(mv.xy, rscroll) != 0)) {
+		mousefp = mousescroll;
+		mousescroll(mv);
+	} else switch(mv.buttons) {
+	case 1:
+		mousefp = mouseselect;
+		ss = decoord(mv.xy) / (Zoomout * FrameSize);
+		mouseselect(mv);
+		break;
+	case 4:
+		n = menuhit(3, mctl, &menu, nil);
 		if (n >= 0) menufunc[n]();
+		break;
+	case 8:
+		drawscroll(-1-row(mv.xy.y));
+		break;
+	case 16:
+		drawscroll(1+row(mv.xy.y));
+		break;
 	}
-	if (mv.buttons == 8) drawscroll(-1-row(mv.xy.y));
-	if (mv.buttons == 16) drawscroll(1+row(mv.xy.y));
+}
+
+void
+mousescroll(Mouse mv)
+{
+	int tl;
+	switch(mv.buttons) {
+	case 0:
+		mousefp = mouseidle;
+		break;
+	case 1:
+		drawscroll(-1-row(mv.xy.y));
+		break;
+	case 2:
+		tl = pcm.len / (FrameSize * Zoomout * dwidth);
+		scroll = tl * (mv.xy.y - rscroll.min.y) / Dy(rscroll);
+		if (scroll > tl) scroll = tl;
+		if (scroll < 0) scroll = 0;
+		redraw();
+		needflush = 1;
+		break;
+	case 4:
+		drawscroll(1+row(mv.xy.y));
+		break;
+	case 8:
+		drawscroll(-1-row(mv.xy.y));
+		break;
+	case 16:
+		drawscroll(1+row(mv.xy.y));
+		break;
+	}
+}
+
+void
+mouseselect(Mouse mv)
+{
+	if (mv.buttons == 0) {
+		mousefp = mouseidle;
+		return;
+	}
+	se = decoord(mv.xy) / (Zoomout * FrameSize);
+	setselect(ss, se);
 }
 
 void
@@ -459,8 +476,6 @@ drawscroll(int ds)
 		scroll = monolen / (Zoomout * dwidth);
 	}
 	if (ds == 0) return;
-	needflush = 1;
-	yield();
 	redraw();
 	needflush = 1;
 }
@@ -646,4 +661,16 @@ clearmask(void)
 			mask.img[i] = nil;
 		}
 	}
+}
+
+long
+decoord(Point xy)
+{
+	long p;
+	p = ((scroll + row(xy.y)) * dwidth + xy.x - rbars.min.x) * Zoomout * FrameSize;
+	if (p < 0) p = 0;
+	if (p > pcm.len) {
+		p = pcm.len;
+	}
+	return p;
 }
